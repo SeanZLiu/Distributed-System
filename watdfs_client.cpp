@@ -339,11 +339,90 @@ int watdfs_cli_release(void *userdata, const char *path,
 int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
                     off_t offset, struct fuse_file_info *fi) {
     // Read size amount of data at offset of file into buf.
-
     // Remember that size may be greater then the maximum array size of the RPC
     // library.
-    return -ENOSYS;
+    // TODO: call watdfs_cli_open??
+    // watdfs_cli_open(userdata, path, fi);
+
+    DLOG("watdfs_cli_read called for '%s'", path);
+    DLOG("the file des is: '%d'", fi->fh);
+
+    // getattr has 6 arguments.
+    // error return 
+    // size finish stop
+    // EOF stop
+
+    size_t read_size = 0;
+    int buf_size = MAX_ARRAY_LEN;
+    while (read_size < size){
+
+        int ARG_COUNT = 6;
+        void **args = new void*[ARG_COUNT];
+        int arg_types[ARG_COUNT + 1];
+        int pathlen = strlen(path) + 1;
+        char *tep_buf = (char *)malloc(buf_size);
+
+        // Fill in the arguments
+        arg_types[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
+        args[0] = (void *)path;
+
+        arg_types[1] = (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) buf_size;
+        args[1] = (void *)tep_buf;
+
+        arg_types[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        args[2] = (void *)(&buf_size);
+        
+        // TODO : offset need to change each time you read
+        arg_types[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        args[3] = (void*)(&offset);
+
+        arg_types[4] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); 
+        args[4] = (void *)fi;
+
+        arg_types[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        int retCode;
+        args[5] = (void*)(&retCode);
+
+        arg_types[6] = 0;
+        
+        //rpc_ret expected to return the num of bytes that the server read if succeed, else negative
+        int rpc_ret = rpcCall((char *)"read", arg_types, args);
+
+        // int fxn_ret = 0;
+        if (rpc_ret < 0) {
+            DLOG("close rpc failed with error '%d'", rpc_ret);
+            return -EINVAL;
+        } else {
+            // Our RPC call succeeded. However, it's possible that the return code
+            // from the server is not 0, that is it may be -errno. Therefore, we
+            // should set our function return value to the retcode from the server.
+            DLOG("read rpc call sucess with retcode '%d'", retCode);
+            if (retCode < 0){
+                return retCode;
+            }
+            DLOG("read bytes this time: '%d'", rpc_ret);
+            // update read_size with num of bytes we just read
+            read_size += rpc_ret;
+            // copy the new content into buf
+            strcpy(buf,tep_buf);
+            // release the memory
+            free(tep_buf);
+            delete []args;
+            // if EOF then return
+            if(rpc_ret < buf_size){
+                break;
+            }
+            //update offset and buf pointer
+            offset += buf_size;
+            buf += buf_size;
+        }
+    }
+
+    // if no error return the size of bytes have been read
+    return read_size;
 }
+
 int watdfs_cli_write(void *userdata, const char *path, const char *buf,
                      size_t size, off_t offset, struct fuse_file_info *fi) {
     // Write size amount of data at offset of file from buf.

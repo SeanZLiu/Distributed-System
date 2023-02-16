@@ -106,6 +106,10 @@ int watdfs_mknod(int *argTypes, void **args) {
 
     // Let sys_ret be the return code from the stat system call.
     int sys_ret = 0;
+    DLOG("full_path: %s", full_path);
+    DLOG("mode: %d", *mode);
+    DLOG("dev: %d", *dev);
+
     sys_ret = mknod(full_path, *mode, *dev);
 
     if (sys_ret < 0) {
@@ -189,6 +193,34 @@ int watdfs_close(int *argTypes, void **args) {
     return 0;
 }
 
+// The server implementation of read.
+int watdfs_read(int *argTypes, void **args) {
+    // Get the arguments.
+
+    char *buf = (char *)args[1];
+    size_t *buf_size = (size_t *)args[2];
+    off_t *offset = (off_t *)args[3];
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[4];
+    int *ret = (int *)args[5];
+
+    // Initially we set set the return code to be 0.
+    *ret = 0;
+    // Let sys_ret be the return code from the stat system call.
+    int bytes_read = 0;
+    bytes_read = pread(fi->fh, buf, *buf_size, *offset);
+    DLOG("Bytes read: %d", bytes_read);
+
+    if (bytes_read < 0) {
+        // If there is an error on the system call, then the return code should
+        // be -errno.
+        *ret = -errno;
+    }
+
+    DLOG("Returning code: %d", *ret);
+
+    return bytes_read;
+}
+
 // The main function of the server.
 int main(int argc, char *argv[]) {
     // argv[1] should contain the directory where you should store data on the
@@ -242,11 +274,11 @@ int main(int argc, char *argv[]) {
         argTypes[3] = 0;
 
         // We need to register the function with the types and the name.
-        ret = rpcRegister((char *)"getattr", argTypes, watdfs_close);
+        ret = rpcRegister((char *)"getattr", argTypes, watdfs_getattr);
         if (ret < 0) {
             // It may be useful to have debug-printing here.
             #ifdef PRINT_ERR
-            std::cerr << "close register error: " << -errno << std::endl;
+            std::cerr << "getattr register error: " << -errno << std::endl;
             #endif
             return ret;
         }
@@ -336,11 +368,40 @@ int main(int argc, char *argv[]) {
         argTypes[3] = 0;
 
         // We need to register the function with the types and the name.
-        ret = rpcRegister((char *)"close", argTypes, watdfs_open);
+        ret = rpcRegister((char *)"close", argTypes, watdfs_close);
         if (ret < 0) {
             // It may be useful to have debug-printing here.
             #ifdef PRINT_ERR
-            std::cerr << "open register error: " << -errno << std::endl;
+            std::cerr << "close register error: " << -errno << std::endl;
+            #endif
+            return ret;
+        }
+    }
+
+    {
+        // Fill in the arguments
+        int argTypes[7];
+
+        argTypes[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+
+        argTypes[1] = (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+
+        argTypes[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+
+        argTypes[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+
+        argTypes[4] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u; 
+
+        argTypes[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+
+        argTypes[6] = 0;
+        // We need to register the function with the types and the name.
+        ret = rpcRegister((char *)"read", argTypes, watdfs_read);
+        if (ret < 0) {
+            // It may be useful to have debug-printing here.
+            #ifdef PRINT_ERR
+            std::cerr << "read register error: " << -errno << std::endl;
             #endif
             return ret;
         }
