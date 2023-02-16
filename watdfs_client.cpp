@@ -8,21 +8,25 @@
 INIT_LOG
 
 #include "rpc.h"
+#include <iostream>
+
+#define PRINT_ERR 1
 
 // SETUP AND TEARDOWN
 void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
                       time_t cache_interval, int *ret_code) {
     // TODO: set up the RPC library by calling `rpcClientInit`.
-
+    int cliInitRes = rpcClientInit();
     // TODO: check the return code of the `rpcClientInit` call
     // `rpcClientInit` may fail, for example, if an incorrect port was exported.
-
+    if(cliInitRes < 0){
+        #ifdef PRINT_ERR
+        std::cerr << "Failed to initialize RPC Client:" << -errno << std::endl;
+        #endif
+    }
     // It may be useful to print to stderr or stdout during debugging.
     // Important: Make sure you turn off logging prior to submission!
     // One useful technique is to use pre-processor flags like:
-    // # ifdef PRINT_ERR
-    // std::cerr << "Failed to initialize RPC Client" << std::endl;
-    // #endif
     // Tip: Try using a macro for the above to minimize the debugging code.
 
     // TODO Initialize any global state that you require for the assignment and return it.
@@ -34,14 +38,27 @@ void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
 
     // TODO: set `ret_code` to 0 if everything above succeeded else some appropriate
     // non-zero value.
-
+    if(cliInitRes >= 0){
+        *ret_code = 0;
+    }else{
+        *ret_code = -errno;
+    }
     // Return pointer to global state data.
     return userdata;
 }
 
 void watdfs_cli_destroy(void *userdata) {
     // TODO: clean up your userdata state.
+    if(userdata != NULL)
+        free(userdata);
     // TODO: tear down the RPC library by calling `rpcClientDestroy`.
+    int destroyRes = rpcClientDestroy();
+    if(destroyRes < 0){
+        #ifdef PRINT_ERR
+        std::cerr << "Failed to destroy RPC Client" << -errno << std::endl;
+        #endif
+    }
+    return;
 }
 
 // GET FILE ATTRIBUTES
@@ -80,11 +97,13 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
     // The third argument is the return code, an output only argument, which is
     // an integer.
     // TODO: fill in this argument type.
-
+    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
     // The return code is not an array, so we need to hand args[2] an int*.
     // The int* could be the address of an integer located on the stack, or use
     // a heap allocated integer, in which case it should be freed.
     // TODO: Fill in the argument
+    int retCode;
+    args[2] = (int *)(&retCode);
 
     // Finally, the last position of the arg types is 0. There is no
     // corresponding arg.
@@ -105,7 +124,7 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
         // Our RPC call succeeded. However, it's possible that the return code
         // from the server is not 0, that is it may be -errno. Therefore, we
         // should set our function return value to the retcode from the server.
-
+        fxn_ret = retCode;
         // TODO: set the function return value to the return code from the server.
     }
 
