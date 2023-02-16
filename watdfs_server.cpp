@@ -13,6 +13,9 @@ INIT_LOG
 #include <errno.h>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
+
+# define PRINT_ERR 1
 
 // Global state server_persist_dir.
 char *server_persist_dir = nullptr;
@@ -66,6 +69,7 @@ int watdfs_getattr(int *argTypes, void **args) {
 
     // Let sys_ret be the return code from the stat system call.
     int sys_ret = 0;
+    sys_ret = stat(full_path, statbuf);
 
     if (sys_ret < 0) {
         // If there is an error on the system call, then the return code should
@@ -90,9 +94,9 @@ int main(int argc, char *argv[]) {
         // helpful here for debugging. Important: Make sure you turn off logging
         // prior to submission!
         // See watdfs_client.c for more details
-        // # ifdef PRINT_ERR
-        // std::cerr << "Usaage:" << argv[0] << " server_persist_dir";
-        // #endif
+        #ifdef PRINT_ERR
+        std::cerr << "Usaage:" << argv[0] << " server_persist_dir" << std::endl;
+        #endif
         return -1;
     }
     // Store the directory in a global variable.
@@ -102,9 +106,15 @@ int main(int argc, char *argv[]) {
     // Important: `rpcServerInit` prints the 'export SERVER_ADDRESS' and
     // 'export SERVER_PORT' lines. Make sure you *do not* print anything
     // to *stdout* before calling `rpcServerInit`.
-    //DLOG("Initializing server...");
 
-    int ret = 0;
+    DLOG("Initializing server...");
+    int ret = rpcServerInit();
+    if (ret < 0){
+        #ifdef PRINT_ERR
+        std::cerr << "Server init failed:" << -errno << std::endl;
+        #endif
+        return -1;
+    }
     // TODO: If there is an error with `rpcServerInit`, it maybe useful to have
     // debug-printing here, and then you should return.
 
@@ -131,13 +141,23 @@ int main(int argc, char *argv[]) {
         ret = rpcRegister((char *)"getattr", argTypes, watdfs_getattr);
         if (ret < 0) {
             // It may be useful to have debug-printing here.
+            #ifdef PRINT_ERR
+            std::cerr << "getattr register error: " << -errno << std::endl;
+            #endif
             return ret;
         }
     }
 
     // TODO: Hand over control to the RPC library by calling `rpcExecute`.
-
+    ret = rpcExecute();
+    if(ret < 0){
+        #ifdef PRINT_ERR
+        std::cerr << "RPC Execute error: " << -errno << std::endl;
+        #endif
+        return -1;
+    }
     // rpcExecute could fail so you may want to have debug-printing here, and
     // then you should return.
+
     return ret;
 }
