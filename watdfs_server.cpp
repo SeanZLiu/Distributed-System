@@ -14,6 +14,7 @@ INIT_LOG
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <fuse.h>
 
 # define PRINT_ERR 1
 
@@ -85,6 +86,109 @@ int watdfs_getattr(int *argTypes, void **args) {
     return 0;
 }
 
+// The server implementation of mknod.
+int watdfs_mknod(int *argTypes, void **args) {
+    // Get the arguments.
+    // The first argument is the path relative to the mountpoint.
+    char *short_path = (char *)args[0];
+    // The second argument is the mode
+    mode_t *mode = (mode_t *)args[1];
+    dev_t *dev = (dev_t *)args[2];
+    // The fourth argument is the return code, which should be set be 0 or -errno.
+    int *ret = (int *)args[3];
+
+    // Get the local file name, so we call our helper function which appends
+    // the server_persist_dir to the given path.
+    char *full_path = get_full_path(short_path);
+
+    // Initially we set set the return code to be 0.
+    *ret = 0;
+
+    // Let sys_ret be the return code from the stat system call.
+    int sys_ret = 0;
+    sys_ret = mknod(full_path, *mode, *dev);
+
+    if (sys_ret < 0) {
+        // If there is an error on the system call, then the return code should
+        // be -errno.
+        *ret = -errno;
+    }
+
+    // Clean up the full path, it was allocated on the heap.
+    free(full_path);
+
+    DLOG("Returning code: %d", *ret);
+    // The RPC call succeeded, so return 0.
+    return 0;
+}
+
+// The server implementation of open.
+int watdfs_open(int *argTypes, void **args) {
+    // Get the arguments.
+    // The first argument is the path relative to the mountpoint.
+    char *short_path = (char *)args[0];
+    // The second argument is the fi
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[1];
+    // The third argument is the return code, which should be set be 0 or -errno.
+    int *ret = (int *)args[2];
+    // Get the local file name, so we call our helper function which appends
+    // the server_persist_dir to the given path.
+    char *full_path = get_full_path(short_path);
+
+    // Initially we set set the return code to be 0.
+    *ret = 0;
+    // Let sys_ret be the return code from the stat system call.
+    int fd = 0;
+    fd = open(full_path, fi->flags);
+
+    if (fd < 0) {
+        // If there is an error on the system call, then the return code should
+        // be -errno.
+        *ret = -errno;
+    }else{
+        fi->fh = fd;
+    }
+
+    // Clean up the full path, it was allocated on the heap.
+    free(full_path);
+
+    DLOG("Returning code: %d", *ret);
+    // The RPC call succeeded, so return 0.
+    return 0;
+}
+
+// The server implementation of close.
+int watdfs_close(int *argTypes, void **args) {
+    // Get the arguments.
+    // The first argument is the path relative to the mountpoint.
+    char *short_path = (char *)args[0];
+    // The second argument is the fi
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[1];
+    // The third argument is the return code, which should be set be 0 or -errno.
+    int *ret = (int *)args[2];
+    // Get the local file name, so we call our helper function which appends
+    // the server_persist_dir to the given path.
+    char *full_path = get_full_path(short_path);
+
+    // Initially we set set the return code to be 0.
+    *ret = 0;
+    // Let sys_ret be the return code from the stat system call.
+    int sys_ret = 0;
+    sys_ret = close(fi->fh);
+
+    if (sys_ret < 0) {
+        // If there is an error on the system call, then the return code should
+        // be -errno.
+        *ret = -errno;
+    }
+    // Clean up the full path, it was allocated on the heap.
+    free(full_path);
+
+    DLOG("Returning code: %d", *ret);
+    // The RPC call succeeded, so return 0.
+    return 0;
+}
+
 // The main function of the server.
 int main(int argc, char *argv[]) {
     // argv[1] should contain the directory where you should store data on the
@@ -138,11 +242,105 @@ int main(int argc, char *argv[]) {
         argTypes[3] = 0;
 
         // We need to register the function with the types and the name.
-        ret = rpcRegister((char *)"getattr", argTypes, watdfs_getattr);
+        ret = rpcRegister((char *)"getattr", argTypes, watdfs_close);
         if (ret < 0) {
             // It may be useful to have debug-printing here.
             #ifdef PRINT_ERR
-            std::cerr << "getattr register error: " << -errno << std::endl;
+            std::cerr << "close register error: " << -errno << std::endl;
+            #endif
+            return ret;
+        }
+    }
+
+    // mknod
+    {
+        int argTypes[5];
+        argTypes[0] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // For arrays the argument is the array pointer, not a pointer to a pointer.
+        // The second argument is the mode. This argument is an input
+        // only argument, an integer
+        argTypes[1] = (1u << ARG_INPUT) | (ARG_INT << 16u);
+        // The third argument is dev, an input only argument, which is
+        // an long number.
+        argTypes[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        // The fourth argument is retcode, an output only argument, which is
+        // an integer.
+        argTypes[3] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+
+        // Finally, the last position of the arg types is 0. There is no
+        // corresponding arg.
+        argTypes[4] = 0;
+
+        // We need to register the function with the types and the name.
+        ret = rpcRegister((char *)"mknod", argTypes, watdfs_mknod);
+        if (ret < 0) {
+            // It may be useful to have debug-printing here.
+            #ifdef PRINT_ERR
+            std::cerr << "mknod register error: " << -errno << std::endl;
+            #endif
+            return ret;
+        }
+    }
+
+    // open
+    {      
+        int argTypes[4];
+        // The first argument is the path, it is an input only argument, and a char
+        // array. The length of the array is the length of the path.
+        argTypes[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // For arrays the argument is the array pointer, not a pointer to a pointer.
+
+        // The second argument is the fi. This argument is an input, output and array
+        // argument, a struct, use char array to store it.
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u; 
+
+        // The third argument is retcode, an output only argument, which is
+        // an integer.
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+
+        // Finally, the last position of the arg types is 0. There is no
+        // corresponding arg.
+        argTypes[3] = 0;
+
+        // We need to register the function with the types and the name.
+        ret = rpcRegister((char *)"open", argTypes, watdfs_open);
+        if (ret < 0) {
+            // It may be useful to have debug-printing here.
+            #ifdef PRINT_ERR
+            std::cerr << "open register error: " << -errno << std::endl;
+            #endif
+            return ret;
+        }
+    }
+
+    //close
+    {
+        int argTypes[4];
+        // The first argument is the path, it is an input only argument, and a char
+        // array. The length of the array is the length of the path.
+        argTypes[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // For arrays the argument is the array pointer, not a pointer to a pointer.
+
+        // The second argument is the fi. This argument is an input and array
+        // argument, a struct, use char array to store it.
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u; 
+
+        // The third argument is retcode, an output only argument, which is
+        // an integer.
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+
+        // Finally, the last position of the arg types is 0. There is no
+        // corresponding arg.
+        argTypes[3] = 0;
+
+        // We need to register the function with the types and the name.
+        ret = rpcRegister((char *)"close", argTypes, watdfs_open);
+        if (ret < 0) {
+            // It may be useful to have debug-printing here.
+            #ifdef PRINT_ERR
+            std::cerr << "open register error: " << -errno << std::endl;
             #endif
             return ret;
         }
