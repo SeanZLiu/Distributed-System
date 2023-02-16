@@ -250,8 +250,6 @@ int watdfs_cli_open(void *userdata, const char *path,
 
     // MAKE THE RPC CALL
     int rpc_ret = rpcCall((char *)"open", arg_types, args);
-    
-    // TODO: should be fd!!!
 
     // HANDLE THE RETURN
     // The integer value watdfs_cli_mknod will return.
@@ -298,13 +296,12 @@ int watdfs_cli_release(void *userdata, const char *path,
 
     // The second argument is the fi. This argument is an input, output and array
     // argument, a struct, use char array to store it.
-    arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); // statbuf
+    arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); // statbuf
     args[1] = (void *)fi;
 
     // The third argument is retcode, an output only argument, which is
     // an integer.
     arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
     int retCode;
     args[2] = (void*)(&retCode);
 
@@ -313,15 +310,13 @@ int watdfs_cli_release(void *userdata, const char *path,
     arg_types[3] = 0;
 
     // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"open", arg_types, args);
-    
-    // TODO: should be fd!!!
+    int rpc_ret = rpcCall((char *)"close", arg_types, args);
 
     // HANDLE THE RETURN
     // The integer value watdfs_cli_mknod will return.
     int fxn_ret = 0;
     if (rpc_ret < 0) {
-        DLOG("open rpc failed with error '%d'", rpc_ret);
+        DLOG("close rpc failed with error '%d'", rpc_ret);
         // Something went wrong with the rpcCall, return a sensible return
         // value. In this case lets return, -EINVAL
         fxn_ret = -EINVAL;
@@ -329,8 +324,7 @@ int watdfs_cli_release(void *userdata, const char *path,
         // Our RPC call succeeded. However, it's possible that the return code
         // from the server is not 0, that is it may be -errno. Therefore, we
         // should set our function return value to the retcode from the server.
-        DLOG("open rpc call sucess with retcode '%d'", retCode);
-        DLOG("fi->fh '%d'", fi->fh);
+        DLOG("close rpc call sucess with retcode '%d'", retCode);
         fxn_ret = retCode;
         // TODO: set the function return value to the return code from the server.
     }
