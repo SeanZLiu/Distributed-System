@@ -165,7 +165,7 @@ int watdfs_open(int *argTypes, void **args) {
 }
 
 // The server implementation of close.
-int watdfs_close(int *argTypes, void **args) {
+int watdfs_release(int *argTypes, void **args) {
     // Get the arguments.
     // The first argument is the path relative to the mountpoint.
     char *short_path = (char *)args[0];
@@ -225,7 +225,7 @@ int watdfs_read(int *argTypes, void **args) {
 
     DLOG("Bytes read: %d", bytes_read);
 
-    if (bytes_read < 0) {
+    if (bytes_read <= 0) {
         // If there is an error on the system call, then the return code should
         // be -errno.
         *ret = -errno;
@@ -507,7 +507,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    //close
+    //release
     {
         int argTypes[4];
         // The first argument is the path, it is an input only argument, and a char
@@ -529,7 +529,7 @@ int main(int argc, char *argv[]) {
         argTypes[3] = 0;
 
         // We need to register the function with the types and the name.
-        ret = rpcRegister((char *)"close", argTypes, watdfs_close);
+        ret = rpcRegister((char *)"release", argTypes, watdfs_release);
         if (ret < 0) {
             // It may be useful to have debug-printing here.
             #ifdef PRINT_ERR

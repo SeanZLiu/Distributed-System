@@ -312,13 +312,13 @@ int watdfs_cli_release(void *userdata, const char *path,
     arg_types[3] = 0;
 
     // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"close", arg_types, args);
+    int rpc_ret = rpcCall((char *)"release", arg_types, args);
 
     // HANDLE THE RETURN
     // The integer value watdfs_cli_mknod will return.
     int fxn_ret = 0;
     if (rpc_ret < 0) {
-        DLOG("close rpc failed with error '%d'", rpc_ret);
+        DLOG("release rpc failed with error '%d'", rpc_ret);
         // Something went wrong with the rpcCall, return a sensible return
         // value. In this case lets return, -EINVAL
         fxn_ret = -EINVAL;
@@ -326,7 +326,7 @@ int watdfs_cli_release(void *userdata, const char *path,
         // Our RPC call succeeded. However, it's possible that the return code
         // from the server is not 0, that is it may be -errno. Therefore, we
         // should set our function return value to the retcode from the server.
-        DLOG("close rpc call sucess with retcode '%d'", retCode);
+        DLOG("release rpc call sucess with retcode '%d'", retCode);
         fxn_ret = retCode;
         // TODO: set the function return value to the return code from the server.
     }
@@ -350,7 +350,7 @@ int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
     int pathlen = strlen(path) + 1;
 
     long read_size = 0;
-    long buf_size = 4;
+    long buf_size = MAX_ARRAY_LEN;
 
     arg_types[0] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
 
@@ -365,27 +365,34 @@ int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
     int retCode;
     args[5] = (void*)(&retCode);
 
+    args[0] = (void *)path;
+    args[4] = (void *)fi;
     arg_types[6] = 0;
 
-    long current_offset = offset;
-    char *tempBufCache = buf;
+    // long current_offset = offset;
+    // char *tempBufCache = buf;
 
     while (read_size < size){
         DLOG("read_size this loop '%d'", read_size);
 
-        char *tep_buf = (char *)malloc(buf_size);
-					// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
-		memset(tep_buf, 0, sizeof(buf_size));
+        // char *tep_buf = (char *)malloc(buf_size);
+		// 			// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
+		// memset(tep_buf, 0, sizeof(buf_size));
 
-        DLOG("client tep_buf add '%u'", tep_buf);
-        
+        // DLOG("client tep_buf add '%u'", tep_buf);
+        if(size < MAX_ARRAY_LEN){
+            buf_size = size;
+            DLOG("size: %d,  is smaller than buf_size",  size);
+        }
+        if(size - read_size < MAX_ARRAY_LEN){
+            buf_size = size - read_size;
+        }
+
         // Fill in the arguments
-        args[0] = (void *)path;
         arg_types[1] = (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) buf_size;
-        args[1] = (void *)tep_buf;
+        args[1] = (void *)buf;
         args[2] = (void *)&buf_size;
-        args[3] = (void *)&current_offset;
-        args[4] = (void *)fi;
+        args[3] = (void *)&offset;
         // DLOG("file descrip: %d, path: %s, before call", ((void *)args[4])->fh, path);
 
 
@@ -405,18 +412,22 @@ int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
             if (retCode < 0){
                 return retCode;
             }
+            if(retCode == 0){
+                break;
+            }
             DLOG("read bytes this time: '%d'", retCode);
             // update read_size with num of bytes we just read
             read_size += retCode;
             // copy the new content into buf
-			tempBufCache = (char *)mempcpy(tempBufCache, tep_buf, retCode);
-            current_offset += retCode;
-            DLOG("tep_buf: %s, bufsize: %ld, offset_each: %ld, after call", tep_buf, buf_size, current_offset);
+			// buf = (char *)mempcpy(buf, tep_buf, retCode);
+            offset += retCode;
+            buf += retCode;
+            // DLOG("tep_buf: %s, bufsize: %ld, offset_each: %ld, after call", tep_buf, buf_size, current_offset);
             DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
             DLOG("buf: %s, after call", buf);
 
             // release the memory
-            free(tep_buf);
+            // free(tep_buf);
             // if EOF then return
             DLOG("read bytes this time: '%d'", retCode);
             DLOG("buf size this time: '%d'", buf_size);
@@ -430,9 +441,118 @@ int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
     delete []args;
 
     // if no error return the size of bytes have been read
+    DLOG("read returned! read bytes: '%d'", retCode);
     return read_size;
 }
 
+// // READ AND WRITE DATA
+// int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
+//                     off_t offset, struct fuse_file_info *fi) {
+//     // Read size amount of data at offset of file into buf.
+//     // Remember that size may be greater then the maximum array size of the RPC
+//     // library.
+
+//     int ARG_COUNT = 6;
+//     void **args = new void*[ARG_COUNT];
+//     int arg_types[ARG_COUNT + 1];
+//     int pathlen = strlen(path) + 1;
+
+//     long read_size = 0;
+//     // long buf_size = MAX_ARRAY_LEN;
+
+//     arg_types[0] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
+
+//     arg_types[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+
+//     // TODO : offset need to change each time you read
+//     arg_types[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+
+//     arg_types[4] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); 
+    
+//     arg_types[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+//     int retCode;
+//     args[5] = (void*)(&retCode);
+
+//     args[0] = (void *)path;
+//     args[4] = (void *)fi;
+//     arg_types[6] = 0;
+
+//     // long current_offset = offset;
+//     // char *tempBufCache = buf;
+//     int buf_size = MAX_ARRAY_LENGTH;
+
+
+//     while (read_size < size){
+//         DLOG("read_size this loop '%d'", read_size);
+
+//         // char *tep_buf = (char *)malloc(buf_size);
+// 		// 			// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
+// 		// memset(tep_buf, 0, sizeof(buf_size));
+
+//         DLOG("client tep_buf add '%u'", tep_buf);
+//         if(size < MAX_){
+//             buf_size = size;
+//         }
+//         if(size - read_size < MAX_ARRAY_LENGTH){
+//             buf_size = size - read_size;
+//         }
+
+//         // Fill in the arguments
+//         arg_types[1] = (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) buf_size;
+//         args[1] = (void *)buf;
+//         args[2] = (void *)&buf_size;
+//         args[3] = (void *)&offset;
+//         // DLOG("file descrip: %d, path: %s, before call", ((void *)args[4])->fh, path);
+
+
+//         //rpc_ret expected to return the num of bytes that the server read if succeed, else negative
+//         int rpc_ret = rpcCall((char *)"read", arg_types, args);
+//         DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
+
+//         // int fxn_ret = 0;
+//         if (rpc_ret < 0) {
+//             DLOG("read rpc failed with error '%d'", rpc_ret);
+//             return -EINVAL;
+//         } else {
+//             // Our RPC call succeeded. However, it's possible that the return code
+//             // from the server is not 0, that is it may be -errno. Therefore, we
+//             // should set our function return value to the retcode from the server.
+//             DLOG("read rpc call sucess with retcode '%d'", retCode);
+//             if (retCode < 0){
+//                 return retCode;
+//             }
+//             if(retCode == 0){
+//                 break;
+//             }
+//             DLOG("read bytes this time: '%d'", retCode);
+//             // update read_size with num of bytes we just read
+//             read_size += retCode;
+//             // copy the new content into buf
+// 			// buf = (char *)mempcpy(buf, tep_buf, retCode);
+//             offset += retCode;
+//             buf += retCode;
+//             // DLOG("tep_buf: %s, bufsize: %ld, offset_each: %ld, after call", tep_buf, buf_size, current_offset);
+//             DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
+//             DLOG("buf: %s, after call", buf);
+
+//             // release the memory
+//             // free(tep_buf);
+//             // if EOF then return
+//             DLOG("read bytes this time: '%d'", retCode);
+//             DLOG("buf size this time: '%d'", buf_size);
+
+//             // if(retCode < buf_size){
+//             //     break;
+//             // }
+//             //update offset and buf pointer
+//         }
+//     }
+//     delete []args;
+
+//     // if no error return the size of bytes have been read
+//     DLOG("read returned! read bytes: '%d'", retCode);
+//     return read_size;
+// }
 
 int watdfs_cli_write(void *userdata, const char *path, const char *buf,
                      size_t size, off_t offset, struct fuse_file_info *fi) {
@@ -446,8 +566,7 @@ int watdfs_cli_write(void *userdata, const char *path, const char *buf,
     int pathlen = strlen(path) + 1;
 
     long write_size = 0;
-    long former_buf_size = 4;
-    long buf_size = 4;
+    long buf_size = MAX_ARRAY_LEN;
 
     arg_types[0] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
 
@@ -461,37 +580,40 @@ int watdfs_cli_write(void *userdata, const char *path, const char *buf,
     arg_types[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
     int retCode;
     args[5] = (void*)(&retCode);
+    args[0] = (void *)path;
+    args[4] = (void *)fi;
+
 
     arg_types[6] = 0;
+
     long current_offset = offset;
     // char *tempBufCache = buf;
-    char *tempBuf = (char *)malloc(size);		// tempBufCache is a copy of buf, a pointer for loop
-    memcpy(tempBuf, buf, size);	
+    // char *tempBuf = (char *)malloc(size);		// tempBufCache is a copy of buf, a pointer for loop
+    // memcpy(tempBuf, buf, size);	
 
     while (write_size < size){
         DLOG("write_size this loop '%d'", write_size);
-
+        if(size < buf_size){
+            buf_size = size;
+        }
         if((size - write_size) < buf_size){
             buf_size = size - write_size;
             DLOG("buf_size new:'%d'", buf_size);
 
         }
 
-        char *tep_buf = (char *)malloc(buf_size);
-					// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
-		memset(tep_buf, 0, sizeof(buf_size));
+        // char *tep_buf = (char *)malloc(buf_size);
+		// 			// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
+		// memset(tep_buf, 0, sizeof(buf_size));
 
-        memcpy(tep_buf, tempBuf, buf_size);
-        tempBuf += buf_size;
-        DLOG("client tep_buf add '%u'", tep_buf);
+        // memcpy(tep_buf, tempBuf, buf_size);
+        // DLOG("client tep_buf add '%u'", tep_buf);
         
         // Fill in the arguments
-        args[0] = (void *)path;
         arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) buf_size;
-        args[1] = (void *)tep_buf;
+        args[1] = (void *)buf;
         args[2] = (void *)&buf_size;
-        args[3] = (void *)&current_offset;
-        args[4] = (void *)fi;
+        args[3] = (void *)&offset;
         // DLOG("file descrip: %d, path: %s, before call", ((void *)args[4])->fh, path);
 
 
@@ -508,23 +630,27 @@ int watdfs_cli_write(void *userdata, const char *path, const char *buf,
             // from the server is not 0, that is it may be -errno. Therefore, we
             // should set our function return value to the retcode from the server.
             DLOG("read rpc call sucess with retcode '%d'", retCode);
-            if (retCode < 0){
+            if(retCode < 0){
                 return retCode;
+            }
+            if(retCode == 0){
+                break;
             }
             DLOG("write bytes this time: '%d'", retCode);
             // update write_size with num of bytes we just read
             write_size += retCode;
+            buf += retCode;
             // copy the new content into buf
 			// tempBufCache = (char *)mempcpy(tempBufCache, tep_buf, retCode);
-            current_offset += retCode;
-            DLOG("tep_buf: %s, bufsize: %ld, offset_each: %ld, after call", tep_buf, buf_size, current_offset);
+            offset += retCode;
+            // DLOG("tep_buf: %s, bufsize: %ld, current_offset: %ld, after call", tep_buf, buf_size, current_offset);
             DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
             DLOG("buf: %s, after call", buf);
 
             // release the memory
-            free(tep_buf);
+            // free(tep_buf);
             // if EOF then return
-            if(retCode < former_buf_size){
+            if(retCode < buf_size){
                 break;
             }
             //update offset and buf pointer
