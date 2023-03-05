@@ -10,14 +10,24 @@ INIT_LOG
 #include "rpc.h"
 #include <iostream>
 #include "rw_lock.h"
-
+#include <map>
 
 #define PRINT_ERR 1
 
 typedef struct client_data{
     time_t cache_intvl;
     char *cache_path;
+    std::map <std::string, meta_d> *open_map;  // notice that it is a pointer to mapping boject
 }cli_data;
+
+
+
+typedef struct client_open_meta{
+    bool opening; // necessary? 
+    uint64_t cli_fd;
+    struct fuse_file_info; // contain server fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
+    // mode_t mode;
+}meta_d;
 
 // SETUP AND TEARDOWN
 void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
@@ -39,7 +49,11 @@ void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
     // TODO Initialize any global state that you require for the assignment and return it.
     // The value that you return here will be passed as userdata in other functions.
     // In A1, you might not need it, so you can return `nullptr`.
-    void *userdata = nullptr;
+    cli_data *userdata = (cli_data *)malloc(sizeof(cli_data));
+    userdata->cache_intvl = cache_interval;
+    userdata->cache_path = (char*)malloc(strlen(path_to_cache) + 1);
+    strcpy(userdata->cache_path, path_to_cache);
+    userdata->open_map = new std::map <std::string, meta_d>;
 
     // TODO: save `path_to_cache` and `cache_interval` (for A3).
 
@@ -56,8 +70,12 @@ void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
 
 void watdfs_cli_destroy(void *userdata) {
     // TODO: clean up your userdata state.
-    if(userdata != NULL)
+    if(userdata != NULL){
+
+        // TODO: and mapping need to be delete?
+        free(((cli_data*)userdata)->cache_path);
         free(userdata);
+    }
     // TODO: tear down the RPC library by calling `rpcClientDestroy`.
     int destroyRes = rpcClientDestroy();
     if(destroyRes < 0){
