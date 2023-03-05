@@ -16,8 +16,14 @@ INIT_LOG
 #include <iostream>
 #include <fuse.h>
 #include <fcntl.h>
+#include "rw_lock.h"
 
-// # define PRINT_ERR 1
+
+# define PRINT_ERR 1
+
+//todo:  use a map to track files opened to read or write 
+
+
 
 // Global state server_persist_dir.
 char *server_persist_dir = nullptr;
@@ -45,6 +51,47 @@ char *get_full_path(char *short_path) {
     DLOG("Full path: %s\n", full_path);
 
     return full_path;
+}
+
+// todo need to finish register
+int atom_lock(int *argTypes, void ** args){
+    //todo: impl
+    return -1;
+}
+
+// todo need to finish register
+int atom_unlock(int *argTypes, void ** args){
+    //todo: impl
+    
+    return -1;
+}
+
+//check the modification time of a file on server, compare it with client modification time
+//result get from retcode, 1 means equal, 0 means nequal, negative means errno
+int check_server_time(int *argTypes, void ** args){
+    // The first argument is the path relative to the mountpoint.
+    char *short_path = (char *)args[0];
+    // The second argument is client modification time
+    struct timespec *t_client = (struct timespec *)args[1];
+    // The third argument is the return code, which should be set be 0 or -errno.
+    int *ret = (int *)args[2];
+
+    // Get the local file name, so we call our helper function which appends
+    // the server_persist_dir to the given path.
+    char *full_path = get_full_path(short_path);
+
+    // allocate a space, statbuf, to get the attribute of the file
+    struct stat *statbuf = new struct stat;
+    int sys_ret = stat(full_path, statbuf);
+
+    if(sys_ret < 0){
+        *ret = -errno;
+    }else{
+        //cmp T_client and T_server
+        struct timespec *t_server = &(statbuf->st_mtim);
+        *ret = (t_client->tv_sec == t_server->tv_sec) && (t_client->tv_nsec == t_server->tv_nsec);  // if equals return 1, else return 0
+    }
+    return 0;
 }
 
 // The server implementation of getattr.
@@ -666,13 +713,14 @@ int main(int argc, char *argv[]) {
     {
         int argTypes[4];
 
+        // The first argument is the path, it is an input only argument, and a char
+        // array. The length of the array is the length of the path.
         argTypes[0] =
             (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
-        // For arrays the argument is the array pointer, not a pointer to a pointer.
 
         // The second argument is the ts. This argument is an input, output and array
         // argument, a struct, use char array to store it.
-        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u; // statbuf
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
 
         // The third argument is retcode, an output only argument, which is
         // an integer.
@@ -692,6 +740,49 @@ int main(int argc, char *argv[]) {
             return ret;
         }
     }
+
+    // cmp T_server for a specific file with input T_client
+    {
+        int argTypes[4];
+
+        argTypes[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // For arrays the argument is the array pointer, not a pointer to a pointer.
+
+        // The second argument is the ts. This argument is an input, output and array
+        // argument, a struct, use char array to store it.
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u; // statbuf
+
+        // The third argument is retcode, an output only argument, which is
+        // an integer.
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+
+        // Finally, the last position of the arg types is 0. There is no
+        // corresponding arg.
+        argTypes[3] = 0;
+
+        // We need to register the function with the types and the name.
+        ret = rpcRegister((char *)"checktime", argTypes, check_server_time);
+        if (ret < 0) {
+            // It may be useful to have debug-printing here.
+            #ifdef PRINT_ERR
+            std::cerr << "checktime register error: " << -errno << std::endl;
+            #endif
+            return ret;
+        }
+    }
+
+    // atom_lock
+    {
+
+        // ret = rpcRegister((char *)"lock", argTypes, atom_lock);
+    }
+
+    // atom_unlock()
+    {
+        // ret = rpcRegister((char *)"unlock", argTypes, atom_unlock);
+    }
+
 
     // TODO: Hand over control to the RPC library by calling `rpcExecute`.
     ret = rpcExecute();
