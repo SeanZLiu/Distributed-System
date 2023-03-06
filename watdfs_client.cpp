@@ -11,6 +11,7 @@ INIT_LOG
 #include <iostream>
 #include "rw_lock.h"
 #include <map>
+#include <unistd.h>
 
 #define PRINT_ERR 1
 
@@ -18,13 +19,13 @@ typedef struct client_data{
     time_t cache_intvl;
     char *cache_path;
     std::map <std::string, meta_d> *open_map;  // notice that it is a pointer to mapping boject
+    // maps the filenme(without directory path) to its metadata defined below
 }cli_data;
-
-
 
 typedef struct client_open_meta{
     bool opening; // necessary? 
-    uint64_t cli_fd;
+    timespec tc; // last validate time
+    uint64_t cli_fd; //  file descritor at cilent
     struct fuse_file_info; // contain server fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
     // mode_t mode;
 }meta_d;
@@ -49,13 +50,14 @@ void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
     // TODO Initialize any global state that you require for the assignment and return it.
     // The value that you return here will be passed as userdata in other functions.
     // In A1, you might not need it, so you can return `nullptr`.
-    cli_data *userdata = (cli_data *)malloc(sizeof(cli_data));
+    // cli_data *userdata = (cli_data *)malloc(sizeof(cli_data));// todo maybe can try new
+    cli_data *userdata = new cli_data;
     userdata->cache_intvl = cache_interval;
+
     userdata->cache_path = (char*)malloc(strlen(path_to_cache) + 1);
     strcpy(userdata->cache_path, path_to_cache);
-    userdata->open_map = new std::map <std::string, meta_d>;
 
-    // TODO: save `path_to_cache` and `cache_interval` (for A3).
+    userdata->open_map = new std::map <std::string, meta_d>; // pointer
 
     // TODO: set `ret_code` to 0 if everything above succeeded else some appropriate
     // non-zero value.
@@ -71,10 +73,11 @@ void *watdfs_cli_init(struct fuse_conn_info *conn, const char *path_to_cache,
 void watdfs_cli_destroy(void *userdata) {
     // TODO: clean up your userdata state.
     if(userdata != NULL){
-
+        ((cli_data*)userdata)->open_map->clear(); // todo need to free the space each struct used before this
+        delete ((cli_data*)userdata)->open_map;
         // TODO: and mapping need to be delete?
         free(((cli_data*)userdata)->cache_path);
-        free(userdata);
+        delete userdata;
     }
     // TODO: tear down the RPC library by calling `rpcClientDestroy`.
     int destroyRes = rpcClientDestroy();
@@ -90,79 +93,28 @@ void watdfs_cli_destroy(void *userdata) {
 int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
     // SET UP THE RPC CALL
     DLOG("watdfs_cli_getattr called for '%s'", path);
-    
-    // getattr has 3 arguments.
-    int ARG_COUNT = 3;
+    // TODO check client open state
+    // if( utils_isopen(userdata, path)){ // client has opened the file
+    //     // todo time check
+    //     // if(){ // has opended at read mode
 
-    // Allocate space for the output arguments.
-    void **args = new void*[ARG_COUNT];
+    //     // }
+    //     // else{ // has opended at write mode
 
-    // Allocate the space for arg types, and one extra space for the null
-    // array element.
-    int arg_types[ARG_COUNT + 1];
+    //     // }
+    // }else{ // not open
+    // char *full_path = utils_get_full_path(userdata, path);
+    //     if(access(full_path, F_OK) != -1){ // local exist the copy of the file
+             
+    //     }else{ // local does not exist copy 
 
-    // The path has string length (strlen) + 1 (for the null character).
-    int pathlen = strlen(path) + 1;
-
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-    // The second argument is the stat structure. This argument is an output
-    // only argument, and we treat it as a char array. The length of the array
-    // is the size of the stat structure, which we can determine with sizeof.
-    arg_types[1] = (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) |
-                   (uint) sizeof(struct stat); // statbuf
-    args[1] = (void *)statbuf;
-
-    // The third argument is the return code, an output only argument, which is
-    // an integer.
-    // TODO: fill in this argument type.
-    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    // The return code is not an array, so we need to hand args[2] an int*.
-    // The int* could be the address of an integer located on the stack, or use
-    // a heap allocated integer, in which case it should be freed.
-    // TODO: Fill in the argument
-    int retCode;
-    args[2] = (int *)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[3] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"getattr", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_getattr will return.
+    //     }
+    // } 
+    // TODO 
+    // TODO 
+    // TODO 
+    // TODO 
     int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("getattr rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        fxn_ret = retCode;
-        DLOG("getattr rpc call sucess with retcode '%d'", retCode);
-        // TODO: set the function return value to the return code from the server.
-    }
-
-    if (fxn_ret < 0) {
-        // If the return code of watdfs_cli_getattr is negative (an error), then 
-        // we need to make sure that the stat structure is filled with 0s. Otherwise,
-        // FUSE will be confused by the contradicting return values.
-        memset(statbuf, 0, sizeof(struct stat));
-    }
-
-    // Clean up the memory we have allocated.
-    delete []args;
 
     // Finally return the value we got from the server.
     return fxn_ret;
@@ -386,6 +338,7 @@ int watdfs_cli_open(void *userdata, const char *path,
                     struct fuse_file_info *fi) {
     // Called during open.
     // You should fill in fi->fh.
+    
 
     DLOG("watdfs_cli_open called for '%s'", path);
     // getattr has 3 arguments.
@@ -1497,6 +1450,18 @@ int utils_check_time(void *userdata, const char *path,
     return fxn_ret;
 }
 
+// todo impl, think about argument types
+// transfer file from server to client
+int utils_download(){
+
+}
+
+// todo impl
+// upload file to remote server
+int utils_upload(){
+
+}
+
 // todo impl
 int utils_lock(void *userdata, const char *path, rw_lock_mode_t mode){
     // int rpc_ret = rpcCall((char *)"lock", arg_types, args);
@@ -1507,5 +1472,30 @@ int utils_lock(void *userdata, const char *path, rw_lock_mode_t mode){
 int utils_unlock(void *userdata, const char *path, rw_lock_mode_t mode){
     // int rpc_ret = rpcCall((char *)"unlock", arg_types, args);
     return -1;
+}
+
+int utils_isopen(void *userdata, const char *path){
+    std::string path_str= path_str;
+    if(((cli_data*)userdata)->open_map->find(path_str) != 
+     ((cli_data*)userdata)->open_map->end())
+        return 1;
+    else 
+        return 0;
+}
+
+char *utils_get_full_path(void * userdata, const char *short_path) {
+    int short_path_len = strlen(short_path);
+    int dir_len = strlen(((cli_data*)userdata)->cache_path);
+    int full_len = dir_len + short_path_len + 1;
+
+    char *full_path = (char *)malloc(full_len);
+
+    // First fill in the directory.
+    strcpy(full_path, ((cli_data*)userdata)->cache_path);
+    // Then append the path.
+    strcat(full_path, short_path);
+    DLOG("Full path: %s\n", full_path);
+
+    return full_path;
 }
 
