@@ -302,10 +302,40 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     // TODO 是否需要download
 
     // 需要open
-    int upload_ret =utils_upload();
+    struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+    tmp_info_server->flags = O_RDWR;  // for download, server should open in read mode
+    // try to open on the server
+    int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+    DLOG("open file on the server for temp download with result '%d'", open_res);
+    if(open_res < 0){
+        delete tmp_info_server;
+        free(full_path);
+        DLOG("server open failed.");
+        return open_res; // maybe be not exist on server
+    }
+
+    struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+    tmp_info_cli->flags = O_RDONLY;
+    int open_local = open(full_path, tmp_info_cli->flags);
+    if(open_local < 0){
+        delete tmp_info_server;
+        free(full_path);
+        DLOG("local open failed.");
+        return -errno; // maybe be not exist on server
+    }
+
+    int upload_ret =utils_upload(userdata, path, tmp_info_cli ,tmp_info_server);
     if(upload_ret < 0){
         return upload_ret;
     }
+
+    int close_local = close(tmp_info_cli->fh);
+    DLOG("close file on the client for temp download with result '%d'", close_local);
+
+    int close_res = utils_release(userdata, path, tmp_info_server);
+    DLOG("close file on the server for temp download with result '%d'", close_res); 
+    delete tmp_info_server;
+    delete tmp_info_cli;    
 
     // Finally return the value we got from the server.
     return fxn_ret;
@@ -385,59 +415,8 @@ int watdfs_cli_open(void *userdata, const char *path,
     // Called during open.
     // You should fill in fi->fh.
     
-
-    DLOG("watdfs_cli_open called for '%s'", path);
-    // getattr has 3 arguments.
-    int ARG_COUNT = 3;
-    void **args = new void*[ARG_COUNT];
-    int arg_types[ARG_COUNT + 1];
-    int pathlen = strlen(path) + 1;
-
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-    // The second argument is the fi. This argument is an input, output and array
-    // argument, a struct, use char array to store it.
-    arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); // statbuf
-    args[1] = (void *)fi;
-
-    // The third argument is retcode, an output only argument, which is
-    // an integer.
-    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[2] = (void*)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[3] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"open", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_mknod will return.
     int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("open rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        DLOG("open rpc call sucess with retcode '%d'", retCode);
-        DLOG("fi->fh '%d'", fi->fh);
-        fxn_ret = retCode;
-        // TODO: set the function return value to the return code from the server.
-    }
-    // Clean up the memory we have allocated.
-    delete []args;
+    
 
     // Finally return the value we got from the server.
     return fxn_ret;
@@ -1538,12 +1517,13 @@ int utils_download(void * userdata, const char* path, struct fuse_file_info *cli
 
     struct timespec ts[2] = {tmp_stat->st_atim, tmp_stat->st_mtim};
     int utime_ret = utimensat(0, full_path, ts, 0); // update T_client for the file
-    if(bytes_write < 0){
+    if(utime_ret < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
         return -errno;
     }
+
     // need to update metadata like Tc when has been open
     if(utils_isopen(userdata, path)){
         // meta_d file_meta = (((cli_data*)userdata)->open_map->find(path_name))->second;
@@ -1572,13 +1552,23 @@ int utils_upload(void * userdata, const char* path, struct fuse_file_info *clien
         return server_trunc;
     }
 
-    // todo 
     char * full_path = utils_get_full_path(userdata, path);
+
+    struct stat *tmp_stat = new struct stat; // local stat, to get 
+    int stat_ret = stat(full_path, tmp_stat);
+    if(stat_ret < 0){
+        delete tmp_stat;
+        free(full_path);
+        return -errno;
+    }
+
+    // todo 
 
     size_t size = 65536; // read from server
     char * buf = (char *)calloc(size, 1);
     int read_ret = pread(client_file_info->fh, buf, size, 0);
     if(read_ret < 0){
+        delete tmp_stat;
         free(full_path);
         free(buf);
         return -errno;    
@@ -1587,21 +1577,28 @@ int utils_upload(void * userdata, const char* path, struct fuse_file_info *clien
     // TODO if read 0 bytes?
     int server_write = utils_write(userdata, path, buf, read_ret, 0, server_file_info); 
     if(server_write < 0){
+        delete tmp_stat;
         free(full_path);
         free(buf);
         return server_write;
     }
     free(buf);
 
-    //TODO utils_utimensat
+    // TODO not necessary to allocate dump memory, since ts is input
+    struct timespec ts[2] = {tmp_stat->st_atim, tmp_stat->st_mtim};  
+    int server_utime_ret = utils_utimensat(userdata, path, ts); // update T_client for the file
+    if(server_utime_ret < 0){
+        delete tmp_stat;
+        free(full_path);
+        return server_utime_ret;
+    }
 
-    //TODO T_server
-    
+    delete tmp_stat;
+    free(full_path);
+
     // utils_unlock(userdata, path, ) // write mode
-    return 0;
-// the specific process of uploading should be atomic
-// need to update metadata of the server?
 
+    return 0;
 }
 
 // todo impl
