@@ -17,7 +17,7 @@ INIT_LOG
 #include <fuse.h>
 #include <fcntl.h>
 #include "rw_lock.h"
-
+#include <map>
 
 # define PRINT_ERR 1
 
@@ -27,6 +27,10 @@ INIT_LOG
 
 // Global state server_persist_dir.
 char *server_persist_dir = nullptr;
+
+// map from file name to open state: O_RDONLY etc. 
+// may just use this to store writer file state
+std::map <std::string, int> *file_map;  // notice that it is a pointer to mapping boject
 
 // Important: the server needs to handle multiple concurrent client requests.
 // You have to be carefuly in handling global variables, esp. for updating them.
@@ -190,6 +194,15 @@ int watdfs_open(int *argTypes, void **args) {
     // Initially we set set the return code to be 0.
     *ret = 0;
     // Let sys_ret be the return code from the stat system call.
+
+    // check have open in write mode?
+    std::string path_str = short_path;
+    if((fi->flags & O_ACCMODE) and file_map->find(path_str) != file_map->end()){ // not read only
+        *ret = -EACCES;
+        DLOG("Failed, this file has already opened in write mode on server.");
+        return 0;
+    }
+
     int fd = 0;
     fd = open(full_path, fi->flags);
 
@@ -200,7 +213,10 @@ int watdfs_open(int *argTypes, void **args) {
     }else{
         fi->fh = fd;
         DLOG("the file descriptor is : %d", fd);
-
+        if(fi->flags & O_ACCMODE){ // file_map add new write mode file has opened 
+            (*file_map)[path_str] = 1;
+            DLOG("File opened in write mode on server succeed.");
+        }
     }
 
     // Clean up the full path, it was allocated on the heap.
@@ -234,6 +250,13 @@ int watdfs_release(int *argTypes, void **args) {
         // If there is an error on the system call, then the return code should
         // be -errno.
         *ret = -errno;
+    }else{
+        if(fi->flags & O_ACCMODE){  // remove it from write mode opened files
+            DLOG("Write mode file '%s' closed on server succeed.", short_path);
+            std::string path_str = short_path;
+            if(file_map->erase(path_str))
+                DLOG("Remove '%s' data from mapping succeed.", short_path);
+        }
     }
     // Clean up the full path, it was allocated on the heap.
     free(full_path);

@@ -23,7 +23,7 @@ typedef struct client_data{
 }cli_data;
 
 typedef struct client_open_meta{
-    bool opening; // necessary? 
+    // bool opening; // necessary? 
     time_t tc; // last validate time
     struct fuse_file_info client_file_inf; // contain client fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
     struct fuse_file_info server_file_inf; // contain server fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
@@ -171,7 +171,9 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
         DLOG("open file on the server for temp download with result '%d'", open_res);
         if(open_res < 0){
             free(full_path);
-            return open_res; // maybe be not exist on server
+            delete tmp_info_server;
+            DLOG("server open failed.");
+            return open_res; // other client may has opened the file in write mode, or file maybe not exist on server
         }
 
         struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
@@ -179,12 +181,18 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
         int open_local = open(full_path, tmp_info_cli->flags);
         if(open_local < 0){
             free(full_path);
+            delete tmp_info_server;
+            delete tmp_info_cli;   
             DLOG("local open failed.");
             return -errno; // maybe be not exist on server
         }
 
         int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
         if(download_ret < 0){
+            free(full_path);
+            delete tmp_info_server;
+            delete tmp_info_cli;      
+            DLOG("download failed.");
             return download_ret;
         }
 
@@ -311,7 +319,7 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
         delete tmp_info_server;
         free(full_path);
         DLOG("server open failed.");
-        return open_res; // maybe be not exist on server
+        return open_res; // maybe be opended by other client in write mode, or not exist on server
     }
 
     struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
@@ -319,6 +327,7 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     int open_local = open(full_path, tmp_info_cli->flags);
     if(open_local < 0){
         delete tmp_info_server;
+        delete tmp_info_cli;
         free(full_path);
         DLOG("local open failed.");
         return -errno; // maybe be not exist on server
@@ -326,6 +335,10 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
 
     int upload_ret =utils_upload(userdata, path, tmp_info_cli ,tmp_info_server);
     if(upload_ret < 0){
+        delete tmp_info_server;
+        delete tmp_info_cli;
+        free(full_path);
+        DLOG("upload failed.");
         return upload_ret;
     }
 
@@ -343,7 +356,6 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
 
 int utils_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     // Called to create a file.
-
 
     // getattr has 4 arguments.
     int ARG_COUNT = 4;
@@ -413,11 +425,85 @@ int utils_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
 int watdfs_cli_open(void *userdata, const char *path,
                     struct fuse_file_info *fi) {
     // Called during open.
-    // You should fill in fi->fh.
+    DLOG("watdfs_cli_open called for '%s'", path);
     
-    int fxn_ret = 0;
-    
+    if(utils_isopen(userdata, path)){ // for mutual exclusion
+        return -EMFILE;
+    }
 
+    // You should fill in fi->fh.
+
+    // TODO is it necessary to check T_client and T_server before creating local copy?
+    DLOG("downloading '%s' from the server.", path);
+    char *full_path = utils_get_full_path(userdata, path);
+    
+    struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+    tmp_info_server->flags = O_RDONLY;  // for download, server should open in read mode
+    // try to open on the server
+    int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+    DLOG("open file on the server for temp download with result '%d'", open_res);
+    if(open_res < 0){
+        free(full_path);
+        delete tmp_info_server;
+        DLOG("server open failed.");
+        return open_res; //  file maybe not exist on server
+    }
+
+    // TODO is it ok to have O_CREAT flag for local ?
+    struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+    tmp_info_cli->flags = O_RDWR | O_CREAT;
+    int open_local = open(full_path, tmp_info_cli->flags);
+    if(open_local < 0){
+        free(full_path);
+        delete tmp_info_server;
+        delete tmp_info_cli;   
+        DLOG("local open failed.");
+        return -errno; // maybe be not exist on server
+    }
+
+    int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
+    if(download_ret < 0){
+        free(full_path);
+        delete tmp_info_server;
+        delete tmp_info_cli;      
+        DLOG("download failed.");
+        return download_ret;
+    }
+
+    int close_local = close(tmp_info_cli->fh);
+    DLOG("close file on the client for temp download with result '%d'", close_local);
+
+    int close_res = utils_release(userdata, path, tmp_info_server);
+    DLOG("close file on the server for temp download with result '%d'", close_res);
+    delete tmp_info_server;
+    delete tmp_info_cli;
+
+    int fxn_ret = 0;
+    // true open local
+    int client_open = open(full_path, fi->flags);
+    if(client_open < 0){
+        free(full_path);
+        return -errno;
+    }
+    fi->fh = client_open;  // set local descriptor
+
+    struct fuse_file_info server_file_inf;
+    server_file_inf.flags = fi->flags;  // open server with input flags
+    // try to open on the server
+    int server_open = utils_open(userdata, path, &server_file_inf);
+    DLOG("open file on the server with result '%d'", open_res);
+    if(server_open < 0){
+        free(full_path);
+        DLOG("server open failed.");
+        return server_open; // maybe be not exist on server
+    }
+    
+    std::string path_str = path;
+    time_t cur_time = time(0); // need to update metadata at userdata, Tc, file info on cli and server
+    (*(((cli_data*)userdata)->open_map))[path_str] = {cur_time, *fi, server_file_inf };
+        // insert(std::pair<std::string, meta_d>(path_str, {cur_time, *fi, server_file_inf }));
+
+    free(full_path);
     // Finally return the value we got from the server.
     return fxn_ret;
 }
@@ -427,7 +513,6 @@ int utils_open(void *userdata, const char *path,
     // Called during open.
     // You should fill in fi->fh.
 
-    DLOG("watdfs_cli_open called for '%s'", path);
     // getattr has 3 arguments.
     int ARG_COUNT = 3;
     void **args = new void*[ARG_COUNT];
@@ -489,59 +574,34 @@ int watdfs_cli_release(void *userdata, const char *path,
     // Called during close, but possibly asynchronously.
 
     DLOG("watdfs_cli_release called for '%s'", path);
-    // getattr has 3 arguments.
-    int ARG_COUNT = 3;
-    void **args = new void*[ARG_COUNT];
-    int arg_types[ARG_COUNT + 1];
-    int pathlen = strlen(path) + 1;
+    
+    struct fuse_file_info server_info;
+    std::string path_str = path;
+    server_info = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
 
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-    // The second argument is the fi. This argument is an input, output and array
-    // argument, a struct, use char array to store it.
-    arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); // statbuf
-    args[1] = (void *)fi;
-
-    // The third argument is retcode, an output only argument, which is
-    // an integer.
-    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[2] = (void*)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[3] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"release", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_mknod will return.
-    int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("release rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        DLOG("release rpc call sucess with retcode '%d'", retCode);
-        fxn_ret = retCode;
-        // TODO: set the function return value to the return code from the server.
+    //  write back to server for write mode opened file
+    if(utils_get_open_mode(userdata, path) != O_RDONLY){
+        int upload_ret =utils_upload(userdata, path, fi ,&server_info);
+        if(upload_ret < 0){
+            return upload_ret;
+        }
     }
-    // Clean up the memory we have allocated.
-    delete []args;
 
-    // Finally return the value we got from the server.
-    return fxn_ret;
+    int sys_ret = 0;    // local release
+    sys_ret = close(fi->fh);
+    if(sys_ret < 0){
+        return -errno;
+    }
+
+    int server_ret = 0; // remote release
+    server_ret = utils_release(userdata, path, &server_info);
+    if(server_ret < 0){
+        return server_ret;
+    }
+
+    ((cli_data*)userdata)->open_map->erase(path_str);  // metadata update
+
+    return 0;
 }
 
 int utils_release(void *userdata, const char *path,

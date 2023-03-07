@@ -54,7 +54,9 @@
         "thread": "cpp",
         "cinttypes": "cpp",
         "typeinfo": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "ctime": "cpp",
+        "cwctype": "cpp"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }
