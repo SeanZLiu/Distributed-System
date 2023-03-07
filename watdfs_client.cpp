@@ -140,8 +140,11 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
                         return -errno; // maybe be not exist on server
                     }
                     // 本地也得重新打开文件？ 不然你怎么写呢
-                    utils_download(userdata, path, &tmp_info_cli, &tmp_info_server); // TODO need to set arguments
-                    
+                    int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
+                    if(download_ret < 0){
+                        return download_ret;
+                    }
+
                     int close_local = close(tmp_info_cli->fh);
                     DLOG("close file on the client for temp download with result '%d'", close_local);
 
@@ -154,6 +157,7 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
         }
         int res = stat(full_path, statbuf);
         if(res < 0){
+            memset(statbuf, 0, sizeof(struct stat));
             fxn_ret = -errno;
         }
     }else{ // not open
@@ -179,8 +183,11 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
             return -errno; // maybe be not exist on server
         }
 
-        utils_download(userdata, path, &tmp_info_cli, &tmp_info_server); // TODO need to set arguments
-        
+        int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
+        if(download_ret < 0){
+            return download_ret;
+        }
+
         int close_local = close(tmp_info_cli->fh);
         DLOG("close file on the client for temp download with result '%d'", close_local);
 
@@ -189,6 +196,7 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
         
         int res = stat(full_path, statbuf);
         if(res < 0){
+            memset(statbuf, 0, sizeof(struct stat));
             fxn_ret = -errno;
         }
         delete tmp_info_server;
@@ -277,72 +285,27 @@ int utils_getattr(void *userdata, const char *path, struct stat *statbuf) {
 // CREATE, OPEN AND CLOSE
 int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     // Called to create a file.
-
-    
-    // SET UP THE RPC CALL
     DLOG("watdfs_cli_mknod called for '%s'", path);
-
-
-    // TODO need to set both client_file_inf and server_file_inf, same flag, diff fd
-    // getattr has 4 arguments.
-    int ARG_COUNT = 4;
-    // Allocate space for the output arguments.
-    void **args = new void*[ARG_COUNT];
-    // Allocate the space for arg types, and one extra space for the null
-    // array element.
-    int arg_types[ARG_COUNT + 1];
-    // The path has string length (strlen) + 1 (for the null character).
-    int pathlen = strlen(path) + 1;
-
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-    // The second argument is the mode. This argument is an input
-    // only argument, an integer
-    arg_types[1] = (1u << ARG_INPUT) | (ARG_INT << 16u);
-    args[1] = (void *)(&mode);
-
-    // The third argument is dev, an input only argument, which is
-    // an long number.
-    arg_types[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
-    args[2] = (void*)(&dev);
-
-    // The fourth argument is retcode, an output only argument, which is
-    // an integer.
-    arg_types[3] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[3] = (void*)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[4] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"mknod", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_mknod will return.
     int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("mknod rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        DLOG("mknod rpc call sucess with retcode '%d'", retCode);
-        fxn_ret = retCode;
-        // TODO: set the function return value to the return code from the server.
+
+    int server_ret = utils_mknod(userdata, path, mode, dev);
+    if(server_ret < 0){
+        return server_ret; // contain errno
     }
-    // Clean up the memory we have allocated.
-    delete []args;
+
+    char * full_path = utils_get_full_path(userdata, path);
+    int local_mknod = mknod(full_path, mode, dev);
+    if(local_mknod < 0){
+        return -errno;
+    }
+
+    // TODO 是否需要download
+
+    // 需要open
+    int upload_ret =utils_upload();
+    if(upload_ret < 0){
+        return upload_ret;
+    }
 
     // Finally return the value we got from the server.
     return fxn_ret;
@@ -1533,22 +1496,109 @@ int utils_check_server_time(void *userdata, const char *path,
     return fxn_ret;
 }
 
-// todo impl, think about argument types
-// transfer file from server to client
+// transfer file from server to client, return 0 if succeed, else errno
 int utils_download(void * userdata, const char* path, struct fuse_file_info *client_file_info, struct fuse_file_info *server_file_info){
+    char * full_path = utils_get_full_path(userdata, path);
     // utils_lock(userdata, path, ) // read mode
-    
 
-    // need to update metadata like Tc
+    int trunc_ret = truncate(full_path, 0); // local truncate 
+    if(trunc_ret < 0){
+        free(full_path);
+        return -errno;
+    }
+
+    struct stat *tmp_stat = new struct stat; // remote get_attr
+    int server_stat_ret = utils_getattr(userdata, path, tmp_stat);
+    if(server_stat_ret < 0){
+        delete tmp_stat;
+        free(full_path);
+        return server_stat_ret;
+    }
+
+    size_t size = 65536; // read from server
+    char * buf = (char *)calloc(size, 1);
+
+    int server_read_ret = utils_read(userdata, path, buf, size, 0, server_file_info);
+    if(server_read_ret < 0){
+        delete tmp_stat;
+        free(full_path);
+        free(buf);
+        return server_read_ret;
+    }
+    
+    // TODO if read 0 bytes?
+    int bytes_write = pwrite(client_file_info->fh, buf, server_read_ret, 0); 
+    if(bytes_write < 0){
+        delete tmp_stat;
+        free(full_path);
+        free(buf);
+        return -errno;
+    }
+    free(buf);
+
+    struct timespec ts[2] = {tmp_stat->st_atim, tmp_stat->st_mtim};
+    int utime_ret = utimensat(0, full_path, ts, 0); // update T_client for the file
+    if(bytes_write < 0){
+        delete tmp_stat;
+        free(full_path);
+        free(buf);
+        return -errno;
+    }
+    // need to update metadata like Tc when has been open
+    if(utils_isopen(userdata, path)){
+        // meta_d file_meta = (((cli_data*)userdata)->open_map->find(path_name))->second;
+        std::string str_path = path;
+        // std::map <std::string, meta_d> *tmp_map = ((cli_data*)userdata)->open_map;  // notice that it is a pointer to mapping boject
+        (*(((cli_data*)userdata)->open_map))[str_path].tc = time(0);
+        // (*tmp_map)[str_path].tc = time(0);
+    }
 
     // utils_unlock(userdata, path, ) // read mode
-    return -1;
+
+    delete tmp_stat;
+    free(full_path);
+    return 0;
 }
 
 // todo impl
 // upload file to remote server
-int utils_upload(){
+int utils_upload(void * userdata, const char* path, struct fuse_file_info *client_file_info, struct fuse_file_info *server_file_info){
 
+
+    // utils_lock(userdata, path, ) // write mode
+
+    int server_trunc = utils_truncate(userdata ,path, 0);
+    if(server_trunc < 0){
+        return server_trunc;
+    }
+
+    // todo 
+    char * full_path = utils_get_full_path(userdata, path);
+
+    size_t size = 65536; // read from server
+    char * buf = (char *)calloc(size, 1);
+    int read_ret = pread(client_file_info->fh, buf, size, 0);
+    if(read_ret < 0){
+        free(full_path);
+        free(buf);
+        return -errno;    
+     }
+    
+    // TODO if read 0 bytes?
+    int server_write = utils_write(userdata, path, buf, read_ret, 0, server_file_info); 
+    if(server_write < 0){
+        free(full_path);
+        free(buf);
+        return server_write;
+    }
+    free(buf);
+
+    //TODO utils_utimensat
+
+    //TODO T_server
+    
+    // utils_unlock(userdata, path, ) // write mode
+    return 0;
 // the specific process of uploading should be atomic
 // need to update metadata of the server?
 
