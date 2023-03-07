@@ -12,7 +12,7 @@ INIT_LOG
 #include "rw_lock.h"
 #include <map>
 #include <unistd.h>
-
+#include <ctime>
 #define PRINT_ERR 1
 
 typedef struct client_data{
@@ -24,10 +24,9 @@ typedef struct client_data{
 
 typedef struct client_open_meta{
     bool opening; // necessary? 
-    timespec tc; // last validate time
-    uint64_t cli_fd; //  file descritor at cilent
-    struct fuse_file_info; // contain server fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
-    // mode_t mode;
+    time_t tc; // last validate time
+    struct fuse_file_info client_file_inf; // contain client fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
+    struct fuse_file_info server_file_inf; // contain server fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
 }meta_d;
 
 // SETUP AND TEARDOWN
@@ -93,30 +92,110 @@ void watdfs_cli_destroy(void *userdata) {
 int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
     // SET UP THE RPC CALL
     DLOG("watdfs_cli_getattr called for '%s'", path);
-    // TODO check client open state
-    // if( utils_isopen(userdata, path)){ // client has opened the file
-    //     // todo time check
-    //     // if(){ // has opended at read mode
-
-    //     // }
-    //     // else{ // has opended at write mode
-
-    //     // }
-    // }else{ // not open
-    // char *full_path = utils_get_full_path(userdata, path);
-    //     if(access(full_path, F_OK) != -1){ // local exist the copy of the file
-             
-    //     }else{ // local does not exist copy 
-
-    //     }
-    // } 
-    // TODO 
-    // TODO 
-    // TODO 
-    // TODO 
+    char *full_path = utils_get_full_path(userdata, path);
     int fxn_ret = 0;
+    // TODO check client open state
+    if(utils_isopen(userdata, path)){ // client has opened the file
+        DLOG("file has opened.");
+        // todo time check 
+        if(utils_get_open_mode(userdata, path) == O_RDONLY){ // if has opended at read only mode
+            DLOG("file has opened in read only mode.");
+            // need to do freshness check
+            if(utils_fresh_timeout(userdata, path)){
+                DLOG("file time out.");
 
-    // Finally return the value we got from the server.
+                struct stat tmp_stat;
+                if(stat(full_path, &tmp_stat) < 0){
+                    free(full_path);
+                    return -errno;
+                }
+                struct timespec t_client;
+                t_client = tmp_stat.st_mtim;
+                DLOG("get client modify time : %ld.", t_client.tv_sec);
+
+                int ret = utils_check_server_time(userdata, path, &t_client);
+                if(ret < 0){
+                    free(full_path);
+                    return ret;
+                }else if(ret == 0){ // time out , t_client != t_server ,need download
+                    DLOG("also, t_client != t_server, need download.");
+
+                    struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+                    tmp_info_server->flags = O_RDONLY;  // for download, server should open in read mode
+                    // try to open on the server
+                    int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+                    DLOG("open file on the server for temp download with result '%d'", open_res);
+                    if(open_res < 0){
+                        free(full_path);
+                        DLOG("server open failed.");
+                        return open_res; // maybe be not exist on server
+                    }
+
+                    struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+                    tmp_info_cli->flags = O_RDWR;
+                    int open_local = open(full_path, tmp_info_cli->flags);
+                    if(open_local < 0){
+                        free(full_path);
+                        DLOG("local open failed.");
+                        return -errno; // maybe be not exist on server
+                    }
+                    // 本地也得重新打开文件？ 不然你怎么写呢
+                    utils_download(userdata, path, &tmp_info_cli, &tmp_info_server); // TODO need to set arguments
+                    
+                    int close_local = close(tmp_info_cli->fh);
+                    DLOG("close file on the client for temp download with result '%d'", close_local);
+
+                    int close_res = utils_release(userdata, path, tmp_info_server);
+                    DLOG("close file on the server for temp download with result '%d'", close_res);
+                    delete tmp_info_server;
+                    delete tmp_info_cli;
+                }
+            }
+        }
+        int res = stat(full_path, statbuf);
+        if(res < 0){
+            fxn_ret = -errno;
+        }
+    }else{ // not open
+        // first transfer from the server
+        DLOG("file has not opened.");
+
+        struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+        tmp_info_server->flags = O_RDONLY;  // for download, server should open in read mode
+        // try to open on the server
+        int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+        DLOG("open file on the server for temp download with result '%d'", open_res);
+        if(open_res < 0){
+            free(full_path);
+            return open_res; // maybe be not exist on server
+        }
+
+        struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+        tmp_info_cli->flags = O_RDWR | O_CREAT;
+        int open_local = open(full_path, tmp_info_cli->flags);
+        if(open_local < 0){
+            free(full_path);
+            DLOG("local open failed.");
+            return -errno; // maybe be not exist on server
+        }
+
+        utils_download(userdata, path, &tmp_info_cli, &tmp_info_server); // TODO need to set arguments
+        
+        int close_local = close(tmp_info_cli->fh);
+        DLOG("close file on the client for temp download with result '%d'", close_local);
+
+        int close_res = utils_release(userdata, path, tmp_info_server);
+        DLOG("close file on the server for temp download with result '%d'", close_res);
+        
+        int res = stat(full_path, statbuf);
+        if(res < 0){
+            fxn_ret = -errno;
+        }
+        delete tmp_info_server;
+        delete tmp_info_cli;        
+    } 
+
+    free(full_path);  
     return fxn_ret;
 }
 
@@ -199,8 +278,12 @@ int utils_getattr(void *userdata, const char *path, struct stat *statbuf) {
 int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     // Called to create a file.
 
+    
     // SET UP THE RPC CALL
     DLOG("watdfs_cli_mknod called for '%s'", path);
+
+
+    // TODO need to set both client_file_inf and server_file_inf, same flag, diff fd
     // getattr has 4 arguments.
     int ARG_COUNT = 4;
     // Allocate space for the output arguments.
@@ -1199,7 +1282,7 @@ int watdfs_cli_fsync(void *userdata, const char *path,
     return fxn_ret;
 }
 
-int utils__fsync(void *userdata, const char *path,
+int utils_fsync(void *userdata, const char *path,
                      struct fuse_file_info *fi) {
     // Force a flush of file data.
      // Called during open.
@@ -1325,7 +1408,7 @@ int watdfs_cli_utimensat(void *userdata, const char *path,
     return fxn_ret;
 }
 
-int utils__utimensat(void *userdata, const char *path,
+int utils_utimensat(void *userdata, const char *path,
                        const struct timespec ts[2]) {
     // Change file access and modification times.
     DLOG("watdfs_cli_utimensat called for '%s'", path);
@@ -1390,7 +1473,7 @@ int utils__utimensat(void *userdata, const char *path,
 
 // check the modification time of a file on server, compare it with client modification time
 // result get from retcode, 1 means equal, 0 means nequal, negative means errno
-int utils_check_time(void *userdata, const char *path,
+int utils_check_server_time(void *userdata, const char *path,
                        const struct timespec *t_client){
 
     DLOG("utils_check_time called for '%s'", path);
@@ -1452,13 +1535,22 @@ int utils_check_time(void *userdata, const char *path,
 
 // todo impl, think about argument types
 // transfer file from server to client
-int utils_download(){
+int utils_download(void * userdata, const char* path, struct fuse_file_info *client_file_info, struct fuse_file_info *server_file_info){
+    // utils_lock(userdata, path, ) // read mode
+    
 
+    // need to update metadata like Tc
+
+    // utils_unlock(userdata, path, ) // read mode
+    return -1;
 }
 
 // todo impl
 // upload file to remote server
 int utils_upload(){
+
+// the specific process of uploading should be atomic
+// need to update metadata of the server?
 
 }
 
@@ -1474,6 +1566,7 @@ int utils_unlock(void *userdata, const char *path, rw_lock_mode_t mode){
     return -1;
 }
 
+// find out whether the file has opened, return 1 if open, else 0
 int utils_isopen(void *userdata, const char *path){
     std::string path_str= path_str;
     if(((cli_data*)userdata)->open_map->find(path_str) != 
@@ -1499,3 +1592,58 @@ char *utils_get_full_path(void * userdata, const char *short_path) {
     return full_path;
 }
 
+// check freshness,whether the file is time out, only for files already open
+bool utils_fresh_timeout(void * userdata, const char *short_path){
+    std::string path_name = short_path;
+    meta_d file_meta = (((cli_data*)userdata)->open_map->find(path_name))->second;
+    time_t tc = file_meta.tc;
+    time_t current_time = time(0);
+    return (current_time - tc) >= ((cli_data*)userdata)->cache_intvl;
+}
+
+// get the mode/falg of an opened file, O_RDONLY, etc.
+int utils_get_open_mode(void * userdata, const char *short_path){
+    std::string path_name = short_path;
+    meta_d file_meta = (((cli_data*)userdata)->open_map->find(path_name))->second;
+    int mode = file_meta.client_file_inf.flags;
+    return mode & O_ACCMODE;
+}
+
+    // char *full_path = utils_get_full_path(userdata, path);
+    //     if(access(full_path, F_OK) != -1){ // local exist the copy of the file
+    //             struct stat tmp_stat;
+    //             if(stat(full_path, &tmp_stat) == 0){
+    //                 struct timespec t_client = tmp_stat.st_mtim;
+    //                 if(T -tc < cache_interval ){ // 时间有效
+    //                     *statbuf = tmp_stat;
+    //                     free(full_path);
+    //                     return 0;
+    //                 }else{ // out of time, need tocheck
+    //                     int freshness = utils_check_server_time(userdata, path, &t_client);
+    //                     if(freshness == 1){
+    //                         *statbuf = tmp_stat;
+    //                         free(full_path);
+    //                         return 0;
+    //                     }elseif(freshness == 0)
+    //                         // todo open on the server
+    //                         utils_download();
+    //                         // todo close on the server
+    //                         stat();
+    //                         free(full_path);
+    //                         return 0;
+    //                     }else{ // time check error
+
+    //                     }
+    //             }else{
+    //                 // stat error
+    //             }
+    //          if(utils_check_server_time(userdata, path,))
+    //     }else{ // local does not exist copy 
+    //         TODO open on the server
+    //         utils_download()
+    //         close on the server
+    //         res = stat()
+    //         free(full_path);
+    //         return 0;
+
+    //     }
