@@ -830,47 +830,59 @@ int utils_download(void * userdata, const char* path, struct fuse_file_info *cli
     char * full_path = utils_get_full_path(userdata, path);
     // utils_lock(userdata, path, ) // read mode
 
+    DLOG("Try to local trucnate.");
     int trunc_ret = truncate(full_path, 0); // local truncate 
     if(trunc_ret < 0){
         free(full_path);
+        DLOG("local truncate failed.");
         return -errno;
     }
-
+            
+    DLOG("try to get server file stat.");
     struct stat *tmp_stat = new struct stat; // remote get_attr
     int server_stat_ret = utils_getattr(userdata, path, tmp_stat);
     if(server_stat_ret < 0){
         delete tmp_stat;
         free(full_path);
+        DLOG("get server file stat failed.");
+
         return server_stat_ret;
     }
 
+    DLOG("try to allocate buf.");
     size_t size = 65536; // read from server
     char * buf = (char *)calloc(size, 1);
-
+    DLOG("allocate buf succeed, try to read from server.");
     int server_read_ret = utils_read(userdata, path, buf, size, 0, server_file_info);
     if(server_read_ret < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
+        DLOG("read from server file failed.");
         return server_read_ret;
     }
     
+    DLOG("try write to local copy.");
     // TODO if read 0 bytes?
     int bytes_write = pwrite(client_file_info->fh, buf, server_read_ret, 0); 
     if(bytes_write < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
+        DLOG("local write failed.");
         return -errno;
     }
     free(buf);
 
+    DLOG("try to local utimensat the copy.");
     struct timespec ts[2] = {tmp_stat->st_atim, tmp_stat->st_mtim};
     int utime_ret = utimensat(0, full_path, ts, 0); // update T_client for the file
     if(utime_ret < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
+        DLOG("local utimensat failed.");
+
         return -errno;
     }
 
@@ -1102,7 +1114,8 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
 
         struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
         tmp_info_cli->flags = O_RDWR | O_CREAT;
-        int open_local = open(full_path, tmp_info_cli->flags);
+        int open_local = open(full_path, tmp_info_cli->flags, 0777);
+        DLOG("open file at local with fd for temp: '%d'", open_local);
         if(open_local < 0){
             free(full_path);
             delete tmp_info_server;
@@ -1153,7 +1166,7 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     }
 
     char * full_path = utils_get_full_path(userdata, path);
-    int local_mknod = mknod(full_path, mode, dev);
+    int local_mknod = mknod(full_path, mode, dev);  // todo 如果文件存在， 做成更改 mode 和 dev？？
     if(local_mknod < 0 and errno != EEXIST){
         return -errno;
     }
@@ -1236,7 +1249,7 @@ int watdfs_cli_open(void *userdata, const char *path,
     // TODO is it ok to have O_CREAT flag for local ?
     struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
     tmp_info_cli->flags = O_RDWR | O_CREAT;
-    int open_local = open(full_path, tmp_info_cli->flags);
+    int open_local = open(full_path, tmp_info_cli->flags, 0777);  // need chmod 
     if(open_local < 0){
         free(full_path);
         delete tmp_info_server;

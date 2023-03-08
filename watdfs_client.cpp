@@ -830,47 +830,59 @@ int utils_download(void * userdata, const char* path, struct fuse_file_info *cli
     char * full_path = utils_get_full_path(userdata, path);
     // utils_lock(userdata, path, ) // read mode
 
+    DLOG("Try to local trucnate.");
     int trunc_ret = truncate(full_path, 0); // local truncate 
     if(trunc_ret < 0){
         free(full_path);
+        DLOG("local truncate failed.");
         return -errno;
     }
-
+            
+    DLOG("try to get server file stat.");
     struct stat *tmp_stat = new struct stat; // remote get_attr
     int server_stat_ret = utils_getattr(userdata, path, tmp_stat);
     if(server_stat_ret < 0){
         delete tmp_stat;
         free(full_path);
+        DLOG("get server file stat failed.");
+
         return server_stat_ret;
     }
 
+    DLOG("try to allocate buf.");
     size_t size = 65536; // read from server
     char * buf = (char *)calloc(size, 1);
-
+    DLOG("allocate buf succeed, try to read from server.");
     int server_read_ret = utils_read(userdata, path, buf, size, 0, server_file_info);
     if(server_read_ret < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
+        DLOG("read from server file failed.");
         return server_read_ret;
     }
     
+    DLOG("try write to local copy.");
     // TODO if read 0 bytes?
     int bytes_write = pwrite(client_file_info->fh, buf, server_read_ret, 0); 
     if(bytes_write < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
+        DLOG("local write failed.");
         return -errno;
     }
     free(buf);
 
+    DLOG("try to local utimensat the copy.");
     struct timespec ts[2] = {tmp_stat->st_atim, tmp_stat->st_mtim};
     int utime_ret = utimensat(0, full_path, ts, 0); // update T_client for the file
     if(utime_ret < 0){
         delete tmp_stat;
         free(full_path);
         free(buf);
+        DLOG("local utimensat failed.");
+
         return -errno;
     }
 
@@ -936,11 +948,19 @@ int utils_upload(void * userdata, const char* path, struct fuse_file_info *clien
 
     // TODO not necessary to allocate dump memory, since ts is input
     struct timespec ts[2] = {tmp_stat->st_atim, tmp_stat->st_mtim};  
-    int server_utime_ret = utils_utimensat(userdata, path, ts); // update T_client for the file
+    int server_utime_ret = utils_utimensat(userdata, path, ts); // update T_server for the file
     if(server_utime_ret < 0){
         delete tmp_stat;
         free(full_path);
         return server_utime_ret;
+    }
+
+    if(utils_isopen(userdata, path)){
+        // meta_d file_meta = (((cli_data*)userdata)->open_map->find(path_name))->second;
+        std::string str_path = path;
+        // std::map <std::string, meta_d> *tmp_map = ((cli_data*)userdata)->open_map;  // notice that it is a pointer to mapping boject
+        (*(((cli_data*)userdata)->open_map))[str_path].tc = time(0);
+        // (*tmp_map)[str_path].tc = time(0);
     }
 
     delete tmp_stat;
@@ -1066,6 +1086,8 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
                     // 本地也得重新打开文件？ 不然你怎么写呢
                     int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
                     if(download_ret < 0){
+                        free(full_path);
+                        DLOG("download for fresh failed.");
                         return download_ret;
                     }
 
@@ -1102,7 +1124,8 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
 
         struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
         tmp_info_cli->flags = O_RDWR | O_CREAT;
-        int open_local = open(full_path, tmp_info_cli->flags);
+        int open_local = open(full_path, tmp_info_cli->flags, 0777);
+        DLOG("open file at local with fd for temp: '%d'", open_local);
         if(open_local < 0){
             free(full_path);
             delete tmp_info_server;
@@ -1153,7 +1176,7 @@ int watdfs_cli_mknod(void *userdata, const char *path, mode_t mode, dev_t dev) {
     }
 
     char * full_path = utils_get_full_path(userdata, path);
-    int local_mknod = mknod(full_path, mode, dev);
+    int local_mknod = mknod(full_path, mode, dev);  // todo 如果文件存在， 做成更改 mode 和 dev？？
     if(local_mknod < 0 and errno != EEXIST){
         return -errno;
     }
@@ -1236,7 +1259,7 @@ int watdfs_cli_open(void *userdata, const char *path,
     // TODO is it ok to have O_CREAT flag for local ?
     struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
     tmp_info_cli->flags = O_RDWR | O_CREAT;
-    int open_local = open(full_path, tmp_info_cli->flags);
+    int open_local = open(full_path, tmp_info_cli->flags, 0777);  // need chmod 
     if(open_local < 0){
         free(full_path);
         delete tmp_info_server;
@@ -1335,105 +1358,81 @@ int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
     // Read size amount of data at offset of file into buf.
     // Remember that size may be greater then the maximum array size of the RPC
     // library.
-
-    int ARG_COUNT = 6;
-    void **args = new void*[ARG_COUNT];
-    int arg_types[ARG_COUNT + 1];
-    int pathlen = strlen(path) + 1;
-
-    long read_size = 0;
-    long buf_size = MAX_ARRAY_LEN;
-
-    arg_types[0] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-
-    arg_types[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
-
-    // TODO : offset need to change each time you read
-    arg_types[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
-
-    arg_types[4] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); 
     
-    arg_types[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[5] = (void*)(&retCode);
+    // TODO if the file is not a valid file descriptor or is not open for reading ,return -EBADF
+    if(!utils_isopen(userdata, path) or utils_get_open_mode(userdata, path) == O_WRONLY){ // not open or write only
+        DLOG("file path not open or in write only mode.");
+        return -EBADF;
+    } 
 
-    args[0] = (void *)path;
-    args[4] = (void *)fi;
-    arg_types[6] = 0;
-
-    // long current_offset = offset;
-    // char *tempBufCache = buf;
-
-    while (read_size < size){
-        DLOG("read_size this loop '%d'", read_size);
-
-        // char *tep_buf = (char *)malloc(buf_size);
-		// 			// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
-		// memset(tep_buf, 0, sizeof(buf_size));
-
-        // DLOG("client tep_buf add '%u'", tep_buf);
-        if(size < MAX_ARRAY_LEN){
-            buf_size = size;
-            DLOG("size: %d,  is smaller than buf_size",  size);
+    // TODO freshness check
+    if(utils_fresh_timeout(userdata, path)){ // out of time 
+        char *full_path = utils_get_full_path(userdata, path); // get T_client, which is last local modify time for the file
+        struct stat tmp_stat;
+        if(stat(full_path, &tmp_stat) < 0){
+            free(full_path);
+            return -errno;
         }
-        if(size - read_size < MAX_ARRAY_LEN){
-            buf_size = size - read_size;
-        }
+        struct timespec t_client;
+        t_client = tmp_stat.st_mtim;
+        DLOG("get client modify time : %ld.", t_client.tv_sec);
 
-        // Fill in the arguments
-        arg_types[1] = (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) buf_size;
-        args[1] = (void *)buf;
-        args[2] = (void *)&buf_size;
-        args[3] = (void *)&offset;
-        // DLOG("file descrip: %d, path: %s, before call", ((void *)args[4])->fh, path);
+        int time_equal = utils_check_server_time(userdata, path, &t_client);
 
-
-        //rpc_ret expected to return the num of bytes that the server read if succeed, else negative
-        int rpc_ret = rpcCall((char *)"read", arg_types, args);
-        DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
-
-        // int fxn_ret = 0;
-        if (rpc_ret < 0) {
-            DLOG("read rpc failed with error '%d'", rpc_ret);
-            return -EINVAL;
-        } else {
-            // Our RPC call succeeded. However, it's possible that the return code
-            // from the server is not 0, that is it may be -errno. Therefore, we
-            // should set our function return value to the retcode from the server.
-            DLOG("read rpc call sucess with retcode '%d'", retCode);
-            if (retCode < 0){
-                return retCode;
+        if(time_equal < 0){
+            return time_equal;
+        }else if(time_equal == 0){ // modify time not equal, need to download new copy.
+            
+            struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+            tmp_info_server->flags = O_RDONLY;  // for download, server should open in read mode
+            // try to open on the server
+            int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+            DLOG("open file on the server for temp download with result '%d'", open_res);
+            if(open_res < 0){
+                free(full_path);
+                delete tmp_info_server;
+                DLOG("server open failed.");
+                return open_res; // maybe be not exist on server
             }
-            if(retCode == 0){
-                break;
-            }
-            DLOG("read bytes this time: '%d'", retCode);
-            // update read_size with num of bytes we just read
-            read_size += retCode;
-            // copy the new content into buf
-			// buf = (char *)mempcpy(buf, tep_buf, retCode);
-            offset += retCode;
-            buf += retCode;
-            // DLOG("tep_buf: %s, bufsize: %ld, offset_each: %ld, after call", tep_buf, buf_size, current_offset);
-            DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
-            DLOG("buf: %s, after call", buf);
 
-            // release the memory
-            // free(tep_buf);
-            // if EOF then return
-            DLOG("read bytes this time: '%d'", retCode);
-            DLOG("buf size this time: '%d'", buf_size);
+            struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+            tmp_info_cli->flags = O_RDWR;
+            int open_local = open(full_path, tmp_info_cli->flags);
+            if(open_local < 0){
+                free(full_path);
+                delete tmp_info_server;
+                delete tmp_info_cli;                
+                DLOG("local open failed.");
 
-            if(retCode < buf_size){
-                break;
+                return -errno; // maybe be not exist on server
             }
-            //update offset and buf pointer
+            // 本地也得重新打开文件？ 不然你怎么写呢
+            int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
+            if(download_ret < 0){
+                free(full_path);
+                delete tmp_info_server;
+                delete tmp_info_cli;
+                DLOG("download for fresh failed.");
+                return download_ret;
+            }
+
+            int close_local = close(tmp_info_cli->fh);
+            DLOG("close file on the client for temp download with result '%d'", close_local);
+
+            int close_res = utils_release(userdata, path, tmp_info_server);
+            DLOG("close file on the server for temp download with result '%d'", close_res);
+            delete tmp_info_server;
+            delete tmp_info_cli;
+            free(full_path);
         }
     }
-    delete []args;
 
-    // if no error return the size of bytes have been read
-    DLOG("read returned! read bytes: '%d'", retCode);
+    int read_size = 0;
+    read_size = pread(fi->fh, buf, size, offset);
+    if(read_size < 0){
+        read_size = -errno;  // read errno
+    }
+
     return read_size;
 }
 
@@ -1443,107 +1442,53 @@ int watdfs_cli_write(void *userdata, const char *path, const char *buf,
                      size_t size, off_t offset, struct fuse_file_info *fi) {
     // Write size amount of data at offset of file from buf.
 
-    // Remember that size may be greater then the maximum array size of the RPC
-    // library.
-    int ARG_COUNT = 6;
-    void **args = new void*[ARG_COUNT];
-    int arg_types[ARG_COUNT + 1];
-    int pathlen = strlen(path) + 1;
+    //  if the file is not a valid file descriptor or is not open for writing ,return -EBADF
+    if(!utils_isopen(userdata, path)){ // not open or read only
+        DLOG("file not open.");
+        return -EBADF;
+    } 
+    if(utils_get_open_mode(userdata, path) == O_RDONLY){
+        DLOG("file open in read only mode.");
+        return -EMFILE;
+    }
 
-    long write_size = 0;
-    long buf_size = MAX_ARRAY_LEN;
+    int write_size = 0;
+    write_size =  pwrite(fi->fh, buf, size, offset);
+    if(write_size < 0){
+        DLOG("local write failed.");
+        return -errno;
+    }
 
-    arg_types[0] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-
-    arg_types[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
-
-    // TODO : offset need to change each time you read
-    arg_types[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
-
-    arg_types[4] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); 
-    
-    arg_types[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[5] = (void*)(&retCode);
-    args[0] = (void *)path;
-    args[4] = (void *)fi;
-
-
-    arg_types[6] = 0;
-
-    long current_offset = offset;
-    // char *tempBufCache = buf;
-    // char *tempBuf = (char *)malloc(size);		// tempBufCache is a copy of buf, a pointer for loop
-    // memcpy(tempBuf, buf, size);	
-
-    while (write_size < size){
-        DLOG("write_size this loop '%d'", write_size);
-        if(size < buf_size){
-            buf_size = size;
+    if(utils_fresh_timeout(userdata, path)){ // out of time 
+        char *full_path = utils_get_full_path(userdata, path); // get T_client, which is last local modify time for the file
+        struct stat tmp_stat;
+        if(stat(full_path, &tmp_stat) < 0){
+            free(full_path);
+            return -errno;
         }
-        if((size - write_size) < buf_size){
-            buf_size = size - write_size;
-            DLOG("buf_size new:'%d'", buf_size);
+        struct timespec t_client;
+        t_client = tmp_stat.st_mtim;
+        DLOG("get client modify time : %ld.", t_client.tv_sec);
 
-        }
+        int time_equal = utils_check_server_time(userdata, path, &t_client);
 
-        // char *tep_buf = (char *)malloc(buf_size);
-		// 			// tempBufCache is used to write bufCache from the server to buf, a pointer for loop
-		// memset(tep_buf, 0, sizeof(buf_size));
+        if(time_equal < 0){
+            return time_equal;
+        }else if(time_equal == 0){ // modify time not equal, need to download new copy.
+            struct fuse_file_info server_info;
+            std::string path_str = path;
+            server_info = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
 
-        // memcpy(tep_buf, tempBuf, buf_size);
-        // DLOG("client tep_buf add '%u'", tep_buf);
-        
-        // Fill in the arguments
-        arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) buf_size;
-        args[1] = (void *)buf;
-        args[2] = (void *)&buf_size;
-        args[3] = (void *)&offset;
-        // DLOG("file descrip: %d, path: %s, before call", ((void *)args[4])->fh, path);
-
-
-        //rpc_ret expected to return the num of bytes that the server read if succeed, else negative
-        int rpc_ret = rpcCall((char *)"write", arg_types, args);
-        DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
-
-        // int fxn_ret = 0;
-        if (rpc_ret < 0) {
-            DLOG("read rpc failed with error '%d'", rpc_ret);
-            return -EINVAL;
-        } else {
-            // Our RPC call succeeded. However, it's possible that the return code
-            // from the server is not 0, that is it may be -errno. Therefore, we
-            // should set our function return value to the retcode from the server.
-            DLOG("read rpc call sucess with retcode '%d'", retCode);
-            if(retCode < 0){
-                return retCode;
+            int upload_ret =utils_upload(userdata, path, fi ,&server_info); //TODO if open in write only
+            if(upload_ret < 0){
+                DLOG("upload failed.");
+                return upload_ret;
             }
-            if(retCode == 0){
-                break;
-            }
-            DLOG("write bytes this time: '%d'", retCode);
-            // update write_size with num of bytes we just read
-            write_size += retCode;
-            buf += retCode;
-            // copy the new content into buf
-			// tempBufCache = (char *)mempcpy(tempBufCache, tep_buf, retCode);
-            offset += retCode;
-            // DLOG("tep_buf: %s, bufsize: %ld, current_offset: %ld, after call", tep_buf, buf_size, current_offset);
-            DLOG("file descrip: %d, path: %s, after call", fi->fh, path);
-            DLOG("buf: %s, after call", buf);
-
-            // release the memory
-            // free(tep_buf);
-            // if EOF then return
-            if(retCode < buf_size){
-                break;
-            }
-            //update offset and buf pointer
         }
     }
-    delete []args;
+    // TODO at the end, check freshness to decide whether update files on server
 
-    // if no error return the size of bytes have been read
+    // if no error return the size of bytes have been write
     return write_size;
 }
 
@@ -1551,61 +1496,142 @@ int watdfs_cli_truncate(void *userdata, const char *path, off_t newsize) {
     // Change the file size to newsize.
  // SET UP THE RPC CALL
     DLOG("watdfs_cli_truncate called for '%s'", path);
-
-    int ARG_COUNT = 3;
-    // Allocate space for the output arguments.
-    void **args = new void*[ARG_COUNT];
-    // Allocate the space for arg types, and one extra space for the null
-    // array element.
-    int arg_types[ARG_COUNT + 1];
-    // The path has string length (strlen) + 1 (for the null character).
-    int pathlen = strlen(path) + 1;
-
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-     // The second argument is newsize, an output only argument, which is
-    // an integer.
-    arg_types[1] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
-    args[1] = (void *)(&newsize);
-
-    // The third argument is retcode, an output only argument, which is
-    // an integer.
-    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[2] = (void*)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[3] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"truncate", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_mknod will return.
+    char *full_path = utils_get_full_path(userdata, path);
     int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("truncate rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        DLOG("truncate rpc call sucess with retcode '%d'", retCode);
-        fxn_ret = retCode;
-        // TODO: set the function return value to the return code from the server.
-    }
-    // Clean up the memory we have allocated.
-    delete []args;
+    int file_has_opened = utils_isopen(userdata, path);
 
+    if(file_has_opened){ // client has opened the file
+        DLOG("file has opened.");
+        // todo time check 
+        if(utils_get_open_mode(userdata, path) == O_RDONLY){ // if has opended at read only mode
+            DLOG("file has opened in read only mode.");
+            return -EMFILE;
+        }
+    }else{ // not open
+        // first transfer from the server
+        DLOG("file has not opened.");
+
+        struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+        tmp_info_server->flags = O_RDONLY;  // for download, server should open in read mode
+        // try to open on the server
+        int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+        DLOG("open file on the server for temp download with result '%d'", open_res);
+        if(open_res < 0){
+            free(full_path);
+            delete tmp_info_server;
+            DLOG("server open failed.");
+            return open_res; // other client may has opened the file in write mode, or file maybe not exist on server
+        }
+
+        struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+        tmp_info_cli->flags = O_RDWR | O_CREAT;
+        int open_local = open(full_path, tmp_info_cli->flags, 0777);
+        DLOG("open file at local with fd for temp: '%d'", open_local);
+        if(open_local < 0){
+            free(full_path);
+            delete tmp_info_server;
+            delete tmp_info_cli;   
+            DLOG("local open failed.");
+            return -errno; // maybe be not exist on server
+        }
+        tmp_info_cli->fh = open_local;
+
+        int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
+        if(download_ret < 0){
+            free(full_path);
+            delete tmp_info_server;
+            delete tmp_info_cli;      
+            DLOG("download failed.");
+            return download_ret;
+        }
+
+        int close_local = close(tmp_info_cli->fh);
+        DLOG("close file on the client for temp download with result '%d'", close_local);
+
+        int close_res = utils_release(userdata, path, tmp_info_server);
+        DLOG("close file on the server for temp download with result '%d'", close_res);
+        
+        delete tmp_info_server;
+        delete tmp_info_cli;        
+    } 
+
+    fxn_ret = truncate(full_path, newsize); // local truncate
+    if(fxn_ret < 0){
+        DLOG("local truncate failed");
+        return -errno;
+    }
+
+    // TODO at the end, check freshness to decide whether update files on server
+
+
+
+
+    if(utils_fresh_timeout(userdata, path)){ // out of time 
+        struct stat tmp_stat;
+        if(stat(full_path, &tmp_stat) < 0){
+            free(full_path);
+            return -errno;
+        }
+        struct timespec t_client;
+        t_client = tmp_stat.st_mtim;
+        DLOG("get client modify time : %ld.", t_client.tv_sec);
+
+        int time_equal = utils_check_server_time(userdata, path, &t_client);
+        if(time_equal < 0){
+            return time_equal;
+        }else if(time_equal == 0){  // time different
+
+            struct fuse_file_info tmp_info_server;
+            tmp_info_server.flags = O_RDWR;
+            if(file_has_opened){
+                std::string path_str = path;
+                tmp_info_server = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
+
+            }
+                 // for download, server should open in read mode
+            // try to open on the server
+            int open_res = utils_open(userdata, path, &tmp_info_server); // temporarily open the file on the server for download
+            DLOG("open file on the server for upload with result '%d'", open_res);
+            if(open_res < 0){
+                delete tmp_info_server;
+                free(full_path);
+                DLOG("server open failed.");
+                return open_res; // maybe be opended by other client in write mode, or not exist on server
+            }
+
+            struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+            tmp_info_cli->flags = O_RDONLY;
+            int open_local = open(full_path, tmp_info_cli->flags);
+            if(open_local < 0){
+                delete tmp_info_server;
+                delete tmp_info_cli;
+                free(full_path);
+                DLOG("local open failed.");
+                return -errno; // maybe be not exist on server
+            }
+            tmp_info_cli->fh = open_local;
+
+            int upload_ret =utils_upload(userdata, path, tmp_info_cli ,tmp_info_server);
+            if(upload_ret < 0){
+                delete tmp_info_server;
+                delete tmp_info_cli;
+                free(full_path);
+                DLOG("upload failed.");
+                return upload_ret;
+            }
+
+            int close_local = close(tmp_info_cli->fh);
+            DLOG("close file on the client for temp upload with result '%d'", close_local);
+
+            int close_res = utils_release(userdata, path, tmp_info_server);
+            DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            delete tmp_info_server;
+            delete tmp_info_cli;
+        }    
+    }
+
+
+    free(full_path);  
     // Finally return the value we got from the server.
     return fxn_ret;
 }
@@ -1616,61 +1642,34 @@ int watdfs_cli_fsync(void *userdata, const char *path,
                      struct fuse_file_info *fi) {
     // Force a flush of file data.
      // Called during open.
-    // You should fill in fi->fh.
-
     DLOG("watdfs_cli_fsync called for '%s'", path);
-    // getattr has 3 arguments.
-    int ARG_COUNT = 3;
-    void **args = new void*[ARG_COUNT];
-    int arg_types[ARG_COUNT + 1];
-    int pathlen = strlen(path) + 1;
 
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-    // The second argument is the fi. This argument is an input, output and array
-    // argument, a struct, use char array to store it.
-    arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) sizeof(struct fuse_file_info); // statbuf
-    args[1] = (void *)fi;
-
-    // The third argument is retcode, an output only argument, which is
-    // an integer.
-    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[2] = (void*)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[3] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"fsync", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_mknod will return.
-    int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("fsync rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        DLOG("fsync rpc call sucess with retcode '%d'", retCode);
-        fxn_ret = retCode;
-        // TODO: set the function return value to the return code from the server.
+    if(!utils_isopen(userdata, path)){ // not open or read only
+        DLOG("file not open.");
+        return -EBADF;
+    } 
+    if(utils_get_open_mode(userdata, path) == O_RDONLY){
+        DLOG("file open in read only mode.");
+        return -EMFILE;
     }
-    // Clean up the memory we have allocated.
-    delete []args;
 
-    // Finally return the value we got from the server.
+    int fxn_ret = 0;
+    fxn_ret = fsync(fi->fh);
+    if(fxn_ret < 0){
+        DLOG("local fsync failed");
+        return -errno;
+    }
+
+    struct fuse_file_info server_info;  /flush local copy back to server
+    std::string path_str = path;
+    server_info = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
+
+    fxn_ret =utils_upload(userdata, path, fi ,&server_info); //TODO if open in write only
+    if(fxn_ret < 0){
+        DLOG("upload failed.");
+        return fxn_ret;
+    }
+
     return fxn_ret;
 }
 
@@ -1679,62 +1678,64 @@ int watdfs_cli_utimensat(void *userdata, const char *path,
                        const struct timespec ts[2]) {
     // Change file access and modification times.
     DLOG("watdfs_cli_utimensat called for '%s'", path);
-    // getattr has 3 arguments.
-    int ARG_COUNT = 3;
-    void **args = new void*[ARG_COUNT];
-    int arg_types[ARG_COUNT + 1];
-    int pathlen = strlen(path) + 1;
-    DLOG("want to set last access time '%ld'", ts[1].tv_sec);
-    DLOG("want to set last access time '%ld'", ts[1].tv_nsec);
-    DLOG("want to set last modification time '%ld'", ts[2].tv_sec);
-    DLOG("want to set last modification time '%ld'", ts[2].tv_nsec);
-
-    // Fill in the arguments
-    // The first argument is the path, it is an input only argument, and a char
-    // array. The length of the array is the length of the path.
-    arg_types[0] =
-        (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) pathlen;
-    // For arrays the argument is the array pointer, not a pointer to a pointer.
-    args[0] = (void *)path;
-
-    // The second argument is the ts.
-    arg_types[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | (uint) (2 * sizeof(struct timespec)); // statbuf
-    args[1] = (void *)ts;
-
-    // The third argument is retcode, an output only argument, which is
-    // an integer.
-    arg_types[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
-    int retCode;
-    args[2] = (void*)(&retCode);
-
-    // Finally, the last position of the arg types is 0. There is no
-    // corresponding arg.
-    arg_types[3] = 0;
-
-    // MAKE THE RPC CALL
-    int rpc_ret = rpcCall((char *)"utimensat", arg_types, args);
-
-    // HANDLE THE RETURN
-    // The integer value watdfs_cli_mknod will return.
+    char *full_path = utils_get_full_path(userdata, path);
     int fxn_ret = 0;
-    if (rpc_ret < 0) {
-        DLOG("utimensat rpc failed with error '%d'", rpc_ret);
-        // Something went wrong with the rpcCall, return a sensible return
-        // value. In this case lets return, -EINVAL
-        fxn_ret = -EINVAL;
-    } else {
-        // Our RPC call succeeded. However, it's possible that the return code
-        // from the server is not 0, that is it may be -errno. Therefore, we
-        // should set our function return value to the retcode from the server.
-        DLOG("utimensat rpc call sucess with retcode '%d'", retCode);
-        fxn_ret = retCode;
-        // TODO: set the function return value to the return code from the server.
-    }
-    // Clean up the memory we have allocated.
-    delete []args;
 
+    if(utils_isopen(userdata, path)){ // client has opened the file
+        DLOG("file has opened.");
+        // todo time check 
+        if(utils_get_open_mode(userdata, path) == O_RDONLY){ // if has opended at read only mode
+            DLOG("file has opened in read only mode.");
+            return -EMFILE;
+        }
+    }else{ // not open
+        // first transfer from the server
+        DLOG("file has not opened.");
 
-    // Finally return the value we got from the server.
+        struct fuse_file_info *tmp_info_server = new struct fuse_file_info;
+        tmp_info_server->flags = O_RDONLY;  // for download, server should open in read mode
+        // try to open on the server
+        int open_res = utils_open(userdata, path, tmp_info_server); // temporarily open the file on the server for download
+        DLOG("open file on the server for temp download with result '%d'", open_res);
+        if(open_res < 0){
+            free(full_path);
+            delete tmp_info_server;
+            DLOG("server open failed.");
+            return open_res; // other client may has opened the file in write mode, or file maybe not exist on server
+        }
+
+        struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+        tmp_info_cli->flags = O_RDWR | O_CREAT;
+        int open_local = open(full_path, tmp_info_cli->flags, 0777);
+        DLOG("open file at local with fd for temp: '%d'", open_local);
+        if(open_local < 0){
+            free(full_path);
+            delete tmp_info_server;
+            delete tmp_info_cli;   
+            DLOG("local open failed.");
+            return -errno; // maybe be not exist on server
+        }
+        tmp_info_cli->fh = open_local;
+
+        int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
+        if(download_ret < 0){
+            free(full_path);
+            delete tmp_info_server;
+            delete tmp_info_cli;      
+            DLOG("download failed.");
+            return download_ret;
+        }
+
+        int close_local = close(tmp_info_cli->fh);
+        DLOG("close file on the client for temp download with result '%d'", close_local);
+
+        int close_res = utils_release(userdata, path, tmp_info_server);
+        DLOG("close file on the server for temp download with result '%d'", close_res);
+        
+        delete tmp_info_server;
+        delete tmp_info_cli;        
+    } 
+
     return fxn_ret;
 }
 
