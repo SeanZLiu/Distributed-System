@@ -1563,9 +1563,6 @@ int watdfs_cli_truncate(void *userdata, const char *path, off_t newsize) {
 
     // TODO at the end, check freshness to decide whether update files on server
 
-
-
-
     if(utils_fresh_timeout(userdata, path)){ // out of time 
         struct stat tmp_stat;
         if(stat(full_path, &tmp_stat) < 0){
@@ -1582,28 +1579,24 @@ int watdfs_cli_truncate(void *userdata, const char *path, off_t newsize) {
         }else if(time_equal == 0){  // time different
 
             struct fuse_file_info tmp_info_server;
-            tmp_info_server.flags = O_RDWR;
             if(file_has_opened){
                 std::string path_str = path;
                 tmp_info_server = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
-
-            }
-                 // for download, server should open in read mode
-            // try to open on the server
-            int open_res = utils_open(userdata, path, &tmp_info_server); // temporarily open the file on the server for download
-            DLOG("open file on the server for upload with result '%d'", open_res);
-            if(open_res < 0){
-                delete tmp_info_server;
-                free(full_path);
-                DLOG("server open failed.");
-                return open_res; // maybe be opended by other client in write mode, or not exist on server
+            }else{
+                tmp_info_server.flags = O_RDWR; // for download, server should open in read mode
+                int open_res = utils_open(userdata, path, &tmp_info_server); // temporarily open the file on the server for download
+                DLOG("open file on the server for upload with result '%d'", open_res);
+                if(open_res < 0){
+                    free(full_path);
+                    DLOG("server open failed.");
+                    return open_res; // maybe be opended by other client in write mode, or not exist on server
+                }
             }
 
             struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
             tmp_info_cli->flags = O_RDONLY;
             int open_local = open(full_path, tmp_info_cli->flags);
             if(open_local < 0){
-                delete tmp_info_server;
                 delete tmp_info_cli;
                 free(full_path);
                 DLOG("local open failed.");
@@ -1611,9 +1604,8 @@ int watdfs_cli_truncate(void *userdata, const char *path, off_t newsize) {
             }
             tmp_info_cli->fh = open_local;
 
-            int upload_ret =utils_upload(userdata, path, tmp_info_cli ,tmp_info_server);
+            int upload_ret =utils_upload(userdata, path, tmp_info_cli ,&tmp_info_server);
             if(upload_ret < 0){
-                delete tmp_info_server;
                 delete tmp_info_cli;
                 free(full_path);
                 DLOG("upload failed.");
@@ -1623,9 +1615,10 @@ int watdfs_cli_truncate(void *userdata, const char *path, off_t newsize) {
             int close_local = close(tmp_info_cli->fh);
             DLOG("close file on the client for temp upload with result '%d'", close_local);
 
-            int close_res = utils_release(userdata, path, tmp_info_server);
-            DLOG("close file on the server for temp upload with result '%d'", close_res); 
-            delete tmp_info_server;
+            if(!file_has_opened){
+                int close_res = utils_release(userdata, path, &tmp_info_server);
+                DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            }
             delete tmp_info_cli;
         }    
     }
@@ -1660,7 +1653,7 @@ int watdfs_cli_fsync(void *userdata, const char *path,
         return -errno;
     }
 
-    struct fuse_file_info server_info;  /flush local copy back to server
+    struct fuse_file_info server_info;  // flush local copy back to server
     std::string path_str = path;
     server_info = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
 
@@ -1680,8 +1673,9 @@ int watdfs_cli_utimensat(void *userdata, const char *path,
     DLOG("watdfs_cli_utimensat called for '%s'", path);
     char *full_path = utils_get_full_path(userdata, path);
     int fxn_ret = 0;
+    int file_has_opened = utils_isopen(userdata, path);
 
-    if(utils_isopen(userdata, path)){ // client has opened the file
+    if(file_has_opened){ // client has opened the file
         DLOG("file has opened.");
         // todo time check 
         if(utils_get_open_mode(userdata, path) == O_RDONLY){ // if has opended at read only mode
@@ -1728,13 +1722,81 @@ int watdfs_cli_utimensat(void *userdata, const char *path,
 
         int close_local = close(tmp_info_cli->fh);
         DLOG("close file on the client for temp download with result '%d'", close_local);
-
+        
         int close_res = utils_release(userdata, path, tmp_info_server);
         DLOG("close file on the server for temp download with result '%d'", close_res);
         
         delete tmp_info_server;
         delete tmp_info_cli;        
     } 
+
+    fxn_ret = utimensat(0, full_path, ts, 0);
+    if(fxn_ret < 0){
+        return -errno;
+    }
+
+
+    if(utils_fresh_timeout(userdata, path)){ // out of time 
+        struct stat tmp_stat;
+        if(stat(full_path, &tmp_stat) < 0){
+            free(full_path);
+            return -errno;
+        }
+        struct timespec t_client;
+        t_client = tmp_stat.st_mtim;
+        DLOG("get client modify time : %ld.", t_client.tv_sec);
+
+        int time_equal = utils_check_server_time(userdata, path, &t_client);
+        if(time_equal < 0){
+            return time_equal;
+        }else if(time_equal == 0){  // time different
+
+            struct fuse_file_info tmp_info_server;
+            if(file_has_opened){
+                std::string path_str = path;
+                tmp_info_server = (*(((cli_data*)userdata)->open_map))[path_str].server_file_inf;
+            }else{
+                tmp_info_server.flags = O_RDWR; // for download, server should open in read mode
+                int open_res = utils_open(userdata, path, &tmp_info_server); // temporarily open the file on the server for download
+                DLOG("open file on the server for upload with result '%d'", open_res);
+                if(open_res < 0){
+                    free(full_path);
+                    DLOG("server open failed.");
+                    return open_res; // maybe be opended by other client in write mode, or not exist on server
+                }
+            }
+
+            struct fuse_file_info *tmp_info_cli = new struct fuse_file_info;
+            tmp_info_cli->flags = O_RDONLY;
+            int open_local = open(full_path, tmp_info_cli->flags);
+            if(open_local < 0){
+                delete tmp_info_cli;
+                free(full_path);
+                DLOG("local open failed.");
+                return -errno; // maybe be not exist on server
+            }
+            tmp_info_cli->fh = open_local;
+
+            int upload_ret =utils_upload(userdata, path, tmp_info_cli ,&tmp_info_server);
+            if(upload_ret < 0){
+                delete tmp_info_cli;
+                free(full_path);
+                DLOG("upload failed.");
+                return upload_ret;
+            }
+
+            int close_local = close(tmp_info_cli->fh);
+            DLOG("close file on the client for temp upload with result '%d'", close_local);
+
+            if(!file_has_opened){
+                int close_res = utils_release(userdata, path, &tmp_info_server);
+                DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            }
+            delete tmp_info_cli;
+        }    
+    }
+
+    free(full_path);  
 
     return fxn_ret;
 }
