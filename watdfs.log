@@ -3,40 +3,20 @@ watdfs_init()
 	path_to_cache:/tmp/j254liu/cache
 	cache_interval:0 s
 fuse_context:
-	fuse = 5c37b480
+	fuse = cb965480
 	uid =  0
 	gid =  0
 	pid =  0
-	private_data = 5c379eb0
-	logfile = 5c37aef0
+	private_data = cb963eb0
+	logfile = cb964ef0
 	path_to_cache = /tmp/j254liu/cache
 	umask = 00000
 
-watdfs_getattr(path="/newfile6.txt", statbuf=0x13eaf470)
-watdfs_getattr(path="/newfile6.txt", statbuf=0x13eaf470) returned=-2
-    si:
-	st_dev =  0
-	st_ino =  0
-	st_mode = 0 0
-	st_nlink =  0
-	st_uid =  0
-	st_gid =  0
-	st_rdev =  0
-	st_size =  0
-	st_blksize =  0
-	st_blocks =  0
-	st_atime = 0x 00000000
-	st_mtime = 0x 00000000
-	st_ctime = 0x 00000000
-
-watdfs_mknod(path="/newfile6.txt", mode=0100751, dev=0)
-watdfs_mknod(path="/newfile6.txt", mode=0100751, dev=0) returned=0
-
-watdfs_getattr(path="/newfile6.txt", statbuf=0x13eaf470)
-watdfs_getattr(path="/newfile6.txt", statbuf=0x13eaf470) returned=0
+watdfs_getattr(path="/newfile12.txt", statbuf=0xc32cb570)
+watdfs_getattr(path="/newfile12.txt", statbuf=0xc32cb570) returned=0
     si:
 	st_dev =  2304
-	st_ino =  8794263
+	st_ino =  8801901
 	st_mode = 0 100751
 	st_nlink =  1
 	st_uid =  10290
@@ -45,13 +25,13 @@ watdfs_getattr(path="/newfile6.txt", statbuf=0x13eaf470) returned=0
 	st_size =  0
 	st_blksize =  4096
 	st_blocks =  0
-	st_atime = 0x 64094b3a
-	st_mtime = 0x 64094b3a
-	st_ctime = 0x 64094b3a
+	st_atime = 0x 640a2f4b
+	st_mtime = 0x 640a2f4b
+	st_ctime = 0x 640a3259
 
-watdfs_open(path"/newfile6.txt", fi=0x13eaf520)
+watdfs_open(path"/newfile12.txt", fi=0xc32cb620)
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000000
 	writepage =  0
 	direct_io =  0
@@ -59,107 +39,49 @@ watdfs_open(path"/newfile6.txt", fi=0x13eaf520)
 	fh = 0x 0000000000000000
 	lock_owner = 0x 0000000000000000
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000000
 	writepage =  0
 	direct_io =  0
 	keep_cache =  0
 	fh = 0x 0000000000000007
 	lock_owner = 0x 0000000000000000
-watdfs_open(path"/newfile6.txt", fi=0x13eaf520) returned=0
+watdfs_open(path"/newfile12.txt", fi=0xc32cb620) returned=0
 
-watdfs_write(path="/newfile6.txt", buf=0x09513060, size=5, offset=0, fi=0x13eaf580)
+watdfs_write(path="/newfile12.txt", buf=0x8b68e060, size=5, offset=0, fi=0xc32cb680)
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000007
 	writepage =  0
 	direct_io =  0
 	keep_cache =  0
 	fh = 0x 0000000000000007
-	lock_owner = 0x 66f0721c37297cc3
-watdfs_write(path="/newfile6.txt", buf=0x09513060, size=5, offset=0, fi=0x13eaf580) returned=5
+	lock_owner = 0x b1989474c17db4d2
+watdfs_write(path="/newfile12.txt", buf=0x8b68e060, size=5, offset=0, fi=0xc32cb680) returned=5
 
-always_flush(path="/newfile6.txt", fi=0x13eaf520), returned:0
-
-watdfs_release(path="/newfile6.txt", fi=0x13eaf520)
+watdfs_write(path="/newfile12.txt", buf=0x8b68e060, size=1, offset=5, fi=0xc32cb680)
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000007
 	writepage =  0
 	direct_io =  0
 	keep_cache =  0
 	fh = 0x 0000000000000007
-	lock_owner = 0x 0000000000000000
-watdfs_release(path="/newfile6.txt", fi=0x13eaf520) returned=0
+	lock_owner = 0x b1989474c17db4d2
+watdfs_write(path="/newfile12.txt", buf=0x8b68e060, size=1, offset=5, fi=0xc32cb680) returned=1
 
-watdfs_getattr(path="/newfile7.txt", statbuf=0x13eaf470)
-watdfs_getattr(path="/newfile7.txt", statbuf=0x13eaf470) returned=-2
-    si:
-	st_dev =  0
-	st_ino =  0
-	st_mode = 0 0
-	st_nlink =  0
-	st_uid =  0
-	st_gid =  0
-	st_rdev =  0
-	st_size =  0
-	st_blksize =  0
-	st_blocks =  0
-	st_atime = 0x 00000000
-	st_mtime = 0x 00000000
-	st_ctime = 0x 00000000
-
-watdfs_mknod(path="/newfile7.txt", mode=0100751, dev=0)
-watdfs_mknod(path="/newfile7.txt", mode=0100751, dev=0) returned=0
-
-watdfs_getattr(path="/newfile7.txt", statbuf=0x13eaf470)
-watdfs_getattr(path="/newfile7.txt", statbuf=0x13eaf470) returned=0
-    si:
-	st_dev =  2304
-	st_ino =  8794059
-	st_mode = 0 100751
-	st_nlink =  1
-	st_uid =  10290
-	st_gid =  11081
-	st_rdev =  0
-	st_size =  0
-	st_blksize =  4096
-	st_blocks =  0
-	st_atime = 0x 64094bfc
-	st_mtime = 0x 64094bfc
-	st_ctime = 0x 64094bfc
-
-watdfs_open(path"/newfile7.txt", fi=0x13eaf520)
+watdfs_write(path="/newfile12.txt", buf=0x8b68e060, size=1, offset=6, fi=0xc32cb680)
     fi:
-	flags = 0x 00008002
-	fh_old = 0x 00000000
-	writepage =  0
-	direct_io =  0
-	keep_cache =  0
-	fh = 0x 0000000000000000
-	lock_owner = 0x 0000000000000000
-    fi:
-	flags = 0x 00008002
-	fh_old = 0x 00000000
-	writepage =  0
-	direct_io =  0
-	keep_cache =  0
-	fh = 0x 0000000000000007
-	lock_owner = 0x 0000000000000000
-watdfs_open(path"/newfile7.txt", fi=0x13eaf520) returned=0
-
-watdfs_write(path="/newfile7.txt", buf=0x09513060, size=5, offset=0, fi=0x13eaf580)
-    fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000007
 	writepage =  0
 	direct_io =  0
 	keep_cache =  0
 	fh = 0x 0000000000000007
-	lock_owner = 0x 51d1159e0e7a684b
-watdfs_write(path="/newfile7.txt", buf=0x09513060, size=5, offset=0, fi=0x13eaf580) returned=5
+	lock_owner = 0x b1989474c17db4d2
+watdfs_write(path="/newfile12.txt", buf=0x8b68e060, size=1, offset=6, fi=0xc32cb680) returned=1
 
-watdfs_fsync(path="/newfile7.txt", datasync=0, fi=0x13eaf520)
+watdfs_fsync(path="/newfile12.txt", datasync=0, fi=0xc32cb620)
     fi:
 	flags = 0x 00000000
 	fh_old = 0x 00000007
@@ -168,41 +90,24 @@ watdfs_fsync(path="/newfile7.txt", datasync=0, fi=0x13eaf520)
 	keep_cache =  0
 	fh = 0x 0000000000000007
 	lock_owner = 0x 0000000000000000
-watdfs_fsync(path="/newfile7.txt", datasync=0, fi=0x13eaf520) returned=0
+watdfs_fsync(path="/newfile12.txt", datasync=0, fi=0xc32cb620) returned=0
 
-always_flush(path="/newfile7.txt", fi=0x13eaf520), returned:0
+always_flush(path="/newfile12.txt", fi=0xc32cb620), returned:0
 
-watdfs_release(path="/newfile7.txt", fi=0x13eaf520)
+watdfs_release(path="/newfile12.txt", fi=0xc32cb620)
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000007
 	writepage =  0
 	direct_io =  0
 	keep_cache =  0
 	fh = 0x 0000000000000007
 	lock_owner = 0x 0000000000000000
-watdfs_release(path="/newfile7.txt", fi=0x13eaf520) returned=0
+watdfs_release(path="/newfile12.txt", fi=0xc32cb620) returned=-9
 
-watdfs_getattr(path="/newfile7.txt", statbuf=0x13eaf470)
-watdfs_getattr(path="/newfile7.txt", statbuf=0x13eaf470) returned=0
-    si:
-	st_dev =  2304
-	st_ino =  8794059
-	st_mode = 0 100751
-	st_nlink =  1
-	st_uid =  10290
-	st_gid =  11081
-	st_rdev =  0
-	st_size =  5
-	st_blksize =  4096
-	st_blocks =  8
-	st_atime = 0x 64094bfc
-	st_mtime = 0x 64094bfc
-	st_ctime = 0x 640952b5
-
-watdfs_open(path"/newfile7.txt", fi=0x13eaf520)
+watdfs_open(path"/newfile12.txt", fi=0xc32cb620)
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000000
 	writepage =  0
 	direct_io =  0
@@ -210,46 +115,11 @@ watdfs_open(path"/newfile7.txt", fi=0x13eaf520)
 	fh = 0x 0000000000000000
 	lock_owner = 0x 0000000000000000
     fi:
-	flags = 0x 00008002
+	flags = 0x 00008001
 	fh_old = 0x 00000000
 	writepage =  0
 	direct_io =  0
 	keep_cache =  0
-	fh = 0x 0000000000000007
+	fh = 0x 0000000000000000
 	lock_owner = 0x 0000000000000000
-watdfs_open(path"/newfile7.txt", fi=0x13eaf520) returned=0
-
-watdfs_write(path="/newfile7.txt", buf=0x09513060, size=5, offset=0, fi=0x13eaf580)
-    fi:
-	flags = 0x 00008002
-	fh_old = 0x 00000007
-	writepage =  0
-	direct_io =  0
-	keep_cache =  0
-	fh = 0x 0000000000000007
-	lock_owner = 0x a85c703669641575
-watdfs_write(path="/newfile7.txt", buf=0x09513060, size=5, offset=0, fi=0x13eaf580) returned=5
-
-watdfs_fsync(path="/newfile7.txt", datasync=0, fi=0x13eaf520)
-    fi:
-	flags = 0x 00000000
-	fh_old = 0x 00000007
-	writepage =  0
-	direct_io =  0
-	keep_cache =  0
-	fh = 0x 0000000000000007
-	lock_owner = 0x 0000000000000000
-watdfs_fsync(path="/newfile7.txt", datasync=0, fi=0x13eaf520) returned=0
-
-always_flush(path="/newfile7.txt", fi=0x13eaf520), returned:0
-
-watdfs_release(path="/newfile7.txt", fi=0x13eaf520)
-    fi:
-	flags = 0x 00008002
-	fh_old = 0x 00000007
-	writepage =  0
-	direct_io =  0
-	keep_cache =  0
-	fh = 0x 0000000000000007
-	lock_owner = 0x 0000000000000000
-watdfs_release(path="/newfile7.txt", fi=0x13eaf520) returned=0
+watdfs_open(path"/newfile12.txt", fi=0xc32cb620) returned=-24

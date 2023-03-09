@@ -19,7 +19,7 @@ INIT_LOG
 #include "rw_lock.h"
 #include <map>
 
-# define PRINT_ERR 1
+// # define PRINT_ERR 1
 
 //todo:  use a map to track files opened to read or write 
 
