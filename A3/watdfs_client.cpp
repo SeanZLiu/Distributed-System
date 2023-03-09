@@ -1083,7 +1083,9 @@ int watdfs_cli_getattr(void *userdata, const char *path, struct stat *statbuf) {
                         DLOG("local open failed.");
                         return -errno; // maybe be not exist on server
                     }
-                    // 本地也得重新打开文件？ 不然你怎么写呢
+                    tmp_info_cli->fh = open_local;
+
+                    // 
                     int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
                     if(download_ret < 0){
                         free(full_path);
@@ -1406,6 +1408,8 @@ int watdfs_cli_read(void *userdata, const char *path, char *buf, size_t size,
 
                 return -errno; // maybe be not exist on server
             }
+            tmp_info_cli->fh = open_local;
+
             // 本地也得重新打开文件？ 不然你怎么写呢
             int download_ret = utils_download(userdata, path, tmp_info_cli, tmp_info_server); // TODO need to set arguments
             if(download_ret < 0){
@@ -1447,6 +1451,7 @@ int watdfs_cli_write(void *userdata, const char *path, const char *buf,
         DLOG("file not open.");
         return -EBADF;
     } 
+    
     if(utils_get_open_mode(userdata, path) == O_RDONLY){
         DLOG("file open in read only mode.");
         return -EMFILE;
@@ -1615,8 +1620,10 @@ int watdfs_cli_truncate(void *userdata, const char *path, off_t newsize) {
             int close_local = close(tmp_info_cli->fh);
             DLOG("close file on the client for temp upload with result '%d'", close_local);
 
-            int close_res = utils_release(userdata, path, &tmp_info_server);
-            DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            if(!file_has_opened){
+                int close_res = utils_release(userdata, path, &tmp_info_server);
+                DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            }
             delete tmp_info_cli;
         }    
     }
@@ -1720,7 +1727,7 @@ int watdfs_cli_utimensat(void *userdata, const char *path,
 
         int close_local = close(tmp_info_cli->fh);
         DLOG("close file on the client for temp download with result '%d'", close_local);
-
+        
         int close_res = utils_release(userdata, path, tmp_info_server);
         DLOG("close file on the server for temp download with result '%d'", close_res);
         
@@ -1786,8 +1793,11 @@ int watdfs_cli_utimensat(void *userdata, const char *path,
             int close_local = close(tmp_info_cli->fh);
             DLOG("close file on the client for temp upload with result '%d'", close_local);
 
-            int close_res = utils_release(userdata, path, &tmp_info_server);
-            DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            if(!file_has_opened){
+                int close_res = utils_release(userdata, path, &tmp_info_server);
+                DLOG("close file on the server for temp upload with result '%d'", close_res); 
+            }
+
             delete tmp_info_cli;
         }    
     }
