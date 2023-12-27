@@ -17,7 +17,6 @@ INIT_LOG
 
 
 typedef struct client_open_meta{
-    // bool opening; // necessary? 
     time_t tc; // last validate time
     struct fuse_file_info client_file_inf; // contain client fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
     struct fuse_file_info server_file_inf; // contain server fd and flags(O_CREATE, O_RDONLY, O_RDWR, etc.)
